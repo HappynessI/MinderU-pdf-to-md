@@ -272,6 +272,85 @@ def find_markdown(destination: Path) -> Path:
     return candidates[0]
 
 
+def _move_file(source: Path, destination: Path) -> None:
+    if source.resolve() == destination.resolve():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if source.read_bytes() == destination.read_bytes():
+            source.unlink()
+            return
+        raise MinerUError(f"精简输出时遇到重名文件：{destination}")
+    shutil.move(str(source), str(destination))
+
+
+def slim_precise_output(
+    destination: Path,
+    markdown_path: Path,
+    keep_archive: Optional[Path] = None,
+) -> Path:
+    """Keep only Markdown, the flat content list, and every extracted image."""
+    canonical_markdown = destination / "full.md"
+    _move_file(markdown_path, canonical_markdown)
+
+    content_lists = sorted(
+        (
+            path
+            for path in destination.rglob("*_content_list.json")
+            if path.is_file()
+        ),
+        key=lambda path: (len(path.parts), str(path)),
+    )
+    if not content_lists:
+        eprint("警告：MinerU 结果中没有找到 *_content_list.json")
+    for content_list in content_lists:
+        _move_file(content_list, destination / content_list.name)
+
+    canonical_images = destination / "images"
+    image_directories = sorted(
+        (
+            path
+            for path in destination.rglob("images")
+            if path.is_dir() and path.resolve() != canonical_images.resolve()
+        ),
+        key=lambda path: (len(path.parts), str(path)),
+    )
+    if image_directories:
+        canonical_images.mkdir(parents=True, exist_ok=True)
+    for image_directory in image_directories:
+        for image_file in sorted(image_directory.rglob("*")):
+            if image_file.is_file():
+                relative = image_file.relative_to(image_directory)
+                _move_file(image_file, canonical_images / relative)
+    canonical_images.mkdir(parents=True, exist_ok=True)
+
+    keep_files = {canonical_markdown.resolve()}
+    keep_files.update(
+        path.resolve()
+        for path in destination.glob("*_content_list.json")
+        if path.is_file()
+    )
+    keep_files.update(
+        path.resolve() for path in canonical_images.rglob("*") if path.is_file()
+    )
+    if keep_archive and keep_archive.is_file():
+        keep_files.add(keep_archive.resolve())
+    for path in destination.rglob("*"):
+        if path.is_file() and path.resolve() not in keep_files:
+            path.unlink()
+    for path in sorted(
+        (path for path in destination.rglob("*") if path.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        if path.resolve() != canonical_images.resolve():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+    return canonical_markdown
+
+
 def _wait(deadline: float, interval: float) -> None:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -444,6 +523,12 @@ def convert_precise(
     markdown_path = find_markdown(destination)
     if not args.keep_zip:
         archive.unlink(missing_ok=True)
+    if not args.keep_debug_artifacts:
+        markdown_path = slim_precise_output(
+            destination,
+            markdown_path,
+            keep_archive=archive if args.keep_zip else None,
+        )
     return {
         "mode": "precise",
         "batch_id": batch_id,
@@ -488,6 +573,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-timeout", type=float, default=120.0, help="单次请求超时秒数")
     parser.add_argument("--force", action="store_true", help="允许写入非空输出目录")
     parser.add_argument("--keep-zip", action="store_true", help="保留精准 API 的结果 ZIP")
+    parser.add_argument(
+        "--keep-debug-artifacts",
+        action="store_true",
+        help="保留 origin.pdf、V2 内容列表、模型和布局等调试中间文件",
+    )
     parser.add_argument("--yes", action="store_true", help="确认上传文件到 MinerU")
     return parser
 

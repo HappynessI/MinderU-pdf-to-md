@@ -24,6 +24,7 @@
   3. `GET /api/v4/extract-results/batch/{batch_id}` 轮询。
   4. `state=done` 后下载 `full_zip_url` 并安全解压。
 - ZIP 通常包含 `full.md`、JSON 中间结果和提取图片。
+- 客户端默认只落盘 `full.md`、扁平版 `*_content_list.json` 和全部图片；传入 `--keep-debug-artifacts` 时保留 ZIP 中其余调试中间文件。
 
 ## 状态与停止条件
 

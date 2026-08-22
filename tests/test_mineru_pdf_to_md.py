@@ -28,6 +28,12 @@ def make_result_zip() -> bytes:
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("result/full.md", "# Precise result\n\nConverted by mock MinerU.\n")
         archive.writestr("result/images/figure.txt", "image-placeholder")
+        archive.writestr("result/images/unreferenced.txt", "must-be-preserved")
+        archive.writestr("result/sample_content_list.json", "[]")
+        archive.writestr("result/sample_content_list_v2.json", "[]")
+        archive.writestr("result/sample_model.json", "[]")
+        archive.writestr("result/layout.json", "{}")
+        archive.writestr("result/sample_origin.pdf", PDF_BYTES)
     return buffer.getvalue()
 
 
@@ -217,6 +223,20 @@ class MinerUClientTests(unittest.TestCase):
             result = json.loads(stdout)
             self.assertEqual(result["mode"], "precise")
             self.assertIn("Precise result", Path(result["markdown_path"]).read_text())
+            relative_files = {
+                path.relative_to(output).as_posix()
+                for path in output.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(
+                relative_files,
+                {
+                    "full.md",
+                    "sample_content_list.json",
+                    "images/figure.txt",
+                    "images/unreferenced.txt",
+                },
+            )
             api_requests = [r for r in mock_server.server.requests if r[1].startswith("/api/v4/")]
             self.assertTrue(api_requests)
             self.assertTrue(
@@ -226,6 +246,49 @@ class MinerUClientTests(unittest.TestCase):
             self.assertEqual(upload_requests[0][2].get("Authorization"), None)
             self.assertEqual(upload_requests[0][2].get("Content-Type"), None)
             self.assertFalse((output / "mineru-result.zip").exists())
+
+    def test_precise_debug_mode_keeps_all_extracted_artifacts(self):
+        with MockServer() as mock_server:
+            output = self.root / "debug-output"
+            code, stdout, stderr = self.run_main(
+                [
+                    str(self.pdf),
+                    "--mode",
+                    "precise",
+                    "--base-url",
+                    mock_server.base_url,
+                    "--poll-interval",
+                    "0.01",
+                    "--keep-debug-artifacts",
+                    "--yes",
+                    "-o",
+                    str(output),
+                ],
+                env={"MINERU_API_TOKEN": "debug-test-token"},
+            )
+            self.assertEqual(code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertTrue(Path(result["markdown_path"]).is_file())
+            self.assertTrue((output / "result/sample_origin.pdf").is_file())
+            self.assertTrue((output / "result/sample_content_list_v2.json").is_file())
+            self.assertTrue((output / "result/sample_model.json").is_file())
+            self.assertTrue((output / "result/layout.json").is_file())
+
+    def test_slim_output_preserves_explicitly_requested_zip(self):
+        output = self.root / "keep-zip-output"
+        images = output / "images"
+        images.mkdir(parents=True)
+        markdown = output / "full.md"
+        markdown.write_text("# Result\n", encoding="utf-8")
+        (output / "sample_content_list.json").write_text("[]", encoding="utf-8")
+        (output / "layout.json").write_text("{}", encoding="utf-8")
+        archive = output / "mineru-result.zip"
+        archive.write_bytes(b"zip-placeholder")
+
+        client.slim_precise_output(output, markdown, keep_archive=archive)
+
+        self.assertTrue(archive.is_file())
+        self.assertFalse((output / "layout.json").exists())
 
     def test_noninteractive_upload_requires_yes(self):
         output = self.root / "blocked-output"

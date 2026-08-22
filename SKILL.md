@@ -20,6 +20,12 @@ Resolve `scripts/` relative to this skill directory, not the user's current dire
 - Use `--mode auto` by default: the script selects precise mode when it can resolve a Token, otherwise Agent mode.
 - Add `--ocr` for scanned PDFs or PDFs with a broken text layer. Keep table and formula recognition enabled unless the user asks otherwise.
 
+## Output modes
+
+- Precise mode uses a compact output by default: `full.md`, `*_content_list.json`, and every file under `images/`. Unreferenced images are intentionally retained.
+- Add `--keep-debug-artifacts` only when the user requests complete MinerU output or when diagnosing layout, reading-order, table, formula, or model errors. It retains the returned origin PDF, V2 content list, model output, and layout metadata.
+- Agent mode returns only `full.md` because its API does not provide a result bundle.
+
 ## Authorization and privacy
 
 This workflow uploads the source PDF to `mineru.net`. Before running it, tell the user that the file will leave the local machine. If the current request does not explicitly authorize cloud conversion, obtain confirmation. Pass `--yes` only after authorization.

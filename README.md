@@ -4,14 +4,15 @@
 
 它适合论文、扫描件、双栏文档、公式、表格和复杂版式。Skill 负责判断调用模式、保护 Token、执行固定脚本，并要求在转换后核对 Markdown 与原 PDF，而不是每次临时重写 API 代码。
 
-> 仓库名历史上写作 `MinderU-pdf-to-md`；项目和 Skill 内统一使用官方名称 `MinerU`。
+> 记得关闭代理登录 MinerU 获得 API。
 
 ## 功能
 
 - 支持免 Token 的 MinerU Agent 轻量 API。
 - 支持带 Token 的 MinerU 精准 API，可选择 `vlm` 或 `pipeline`。
 - 支持本地 PDF 的签名 URL 上传、任务轮询、结果下载和安全 ZIP 解压。
-- 自动发现 `full.md`，保留 MinerU 提取的图片和 JSON 文件。
+- 默认精简输出，只保留 `full.md`、`*_content_list.json` 和全部提取图片。
+- 可选调试模式可保留 MinerU 返回的原始 PDF、副本内容列表、模型结果和布局文件。
 - Token 可从环境变量、Token 文件或 macOS Keychain 读取，不写入日志。
 - 主流程仅使用 Python 标准库，不需要安装 `requests` 或完整 MinerU；若 Python TLS 与签名存储端不兼容，会自动使用系统 `curl` 兜底下载。
 - 带离线 mock 单元测试和 GitHub Actions。
@@ -21,8 +22,8 @@
 | 模式 | Token | 限制 | 输出 | 适用场景 |
 |---|---:|---:|---|---|
 | Agent 轻量 | 不需要 | 10 MB、20 页 | Markdown | 小型普通 PDF、快速转换 |
-| 精准 `vlm` | 需要 | 200 MB、200 页 | Markdown、JSON、图片 ZIP | 论文、扫描件、复杂表格和公式 |
-| 精准 `pipeline` | 需要 | 200 MB、200 页 | Markdown、JSON、图片 ZIP | 更偏传统 OCR/版面流水线 |
+| 精准 `vlm` | 需要 | 200 MB、200 页 | Markdown、内容列表、图片 | 论文、扫描件、复杂表格和公式 |
+| 精准 `pipeline` | 需要 | 200 MB、200 页 | Markdown、内容列表、图片 | 更偏传统 OCR/版面流水线 |
 
 限制可能由 MinerU 调整，请以[官方 API 文档](https://mineru.net/apiManage/docs)为准。
 
@@ -95,6 +96,22 @@ python3 scripts/mineru_pdf_to_md.py input.pdf -o output \
 ```bash
 python3 scripts/mineru_pdf_to_md.py input.pdf -o output \
   --mode agent --yes
+```
+
+精准模式默认生成以下精简结构；图片无论是否被 Markdown 引用都会保留：
+
+```text
+output/
+├── full.md
+├── *_content_list.json
+└── images/
+```
+
+如需排查版面、阅读顺序或模型识别问题，启用调试模式保留完整结果：
+
+```bash
+python3 scripts/mineru_pdf_to_md.py input.pdf -o output \
+  --mode precise --keep-debug-artifacts --yes
 ```
 
 不传 `--yes` 时，交互终端会在上传前询问；非交互调用会拒绝上传。
