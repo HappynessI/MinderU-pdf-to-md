@@ -28,7 +28,9 @@ Resolve `scripts/` relative to this skill directory, not the user's current dire
 
 ## Authorization and privacy
 
-This workflow uploads the source PDF to `mineru.net`. Before running it, tell the user that the file will leave the local machine. If the current request does not explicitly authorize cloud conversion, obtain confirmation. Pass `--yes` only after authorization.
+This workflow uploads the source PDF to `mineru.net`. When the user explicitly asks to convert a specific PDF with this skill or MinerU, treat that request as authorization to upload only the named file. Do not ask for a second confirmation; tell the user that MinerU cloud conversion is starting and pass `--yes` automatically.
+
+Obtain confirmation only when the upload scope is ambiguous, the request covers a directory or unspecified batch of files, or the file appears likely to contain sensitive information. Never extend authorization beyond the files the user identified.
 
 Never print, paste, log, commit, or embed the Token. The script resolves it in this order:
 
