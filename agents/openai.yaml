@@ -1,6 +1,6 @@
 interface:
-  display_name: "MinerU PDF 转 Markdown"
-  short_description: "调用 MinerU 云 API 将复杂 PDF 转为结构化 Markdown"
-  default_prompt: "Use $mineru-pdf-to-md to convert this PDF into verified Markdown."
+  display_name: "MinerU PDF 转换与 Markdown 翻译"
+  short_description: "将复杂 PDF 转为 Markdown，并保留结构翻译 Markdown"
+  default_prompt: "Use $mineru-pdf-to-md to convert this PDF to Markdown or translate its Markdown while preserving structure."
 policy:
   allow_implicit_invocation: true

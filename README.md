@@ -1,8 +1,8 @@
-# MinerU PDF to Markdown for Codex
+# MinerU PDF to Markdown + Markdown Translation for Codex
 
-一个可复用的 Codex Skill，通过 [MinerU 官方云 API](https://mineru.net/apiManage/docs) 将本地 PDF 转换为结构化 Markdown。
+一个可复用的 Codex Skill：通过 [MinerU 官方云 API](https://mineru.net/apiManage/docs) 将本地 PDF 转换为结构化 Markdown，并可通过 OpenAI-compatible 文本模型把 Markdown 翻译成中文或其他语言。
 
-它适合论文、扫描件、双栏文档、公式、表格和复杂版式。Skill 负责判断调用模式、保护 Token、执行固定脚本，并要求在转换后核对 Markdown 与原 PDF，而不是每次临时重写 API 代码。
+它适合论文、扫描件、双栏文档、公式、表格和复杂版式。翻译阶段直接处理 `full.md`，保留公式、链接、HTML 表格和图片引用，输出独立的翻译 Markdown 文件夹，不重新渲染 PDF。
 
 > 记得关闭代理登录 MinerU 获得 API。
 
@@ -15,6 +15,11 @@
 - 可选调试模式可保留 MinerU 返回的原始 PDF、副本内容列表、模型结果和布局文件。
 - Token 可从环境变量、Token 文件或 macOS Keychain 读取，不写入日志。
 - 主流程仅使用 Python 标准库，不需要安装 `requests` 或完整 MinerU；若 Python TLS 与签名存储端不兼容，会自动使用系统 `curl` 兜底下载。
+- 支持 DeepSeek 等 OpenAI-compatible 翻译 API，默认模型为 `deepseek-v4-flash`。
+- DeepSeek 翻译默认关闭 thinking，避免把 token 消耗在不必要的推理上。
+- Markdown 按结构分块翻译，支持断点续传、失败重试、术语表和参考文献跳过。
+- 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签，翻译后校验结构。
+- 将 Markdown 实际引用的本地图片复制到翻译目录，生成可独立移动的中文版 Markdown 文件夹。
 - 带离线 mock 单元测试和 GitHub Actions。
 
 ## API 模式
@@ -43,6 +48,12 @@ $mineru-pdf-to-md 把 /path/to/paper.pdf 转成 Markdown
 ```
 
 也可以直接说“用 MinerU 把这个 PDF 转成 Markdown”，Codex 会根据 Skill 描述自动选择它。
+
+翻译已有 Markdown：
+
+```text
+$mineru-pdf-to-md 把 /path/to/full.md 翻译成中文，保留公式、表格和图片
+```
 
 ### 方法二：让 Codex 安装
 
@@ -75,6 +86,31 @@ export MINERU_API_TOKEN='你的 Token'
 ```
 
 不要把 Token 写入仓库、README、命令输出或公开日志。
+
+## 翻译 API Key 配置
+
+Markdown 翻译默认使用 DeepSeek OpenAI-compatible API 和 `deepseek-v4-flash`。也可以通过 `--base-url` 与 `--model` 接入其他兼容服务。
+
+### macOS Keychain（推荐）
+
+```bash
+python3 scripts/configure_translation_token.py
+```
+
+从已有文本或 Markdown 文件导入：
+
+```bash
+python3 scripts/configure_translation_token.py \
+  --source-file /path/to/DeepSeek-API.md
+```
+
+### 环境变量
+
+```bash
+export MARKDOWN_TRANSLATION_API_KEY='你的 API Key'
+```
+
+也兼容 `DEEPSEEK_API_KEY`、`MARKDOWN_TRANSLATION_API_KEY_FILE` 以及命令行参数 `--api-key-file`。密钥只用于请求头，不会写入翻译结果或状态文件。
 
 ## 独立命令行使用
 
@@ -128,9 +164,58 @@ python3 scripts/mineru_pdf_to_md.py input.pdf -o output \
 }
 ```
 
+## Markdown 翻译
+
+把 MinerU 生成的 `full.md` 翻译为简体中文：
+
+```bash
+python3 scripts/translate_markdown.py /path/to/paper-mineru/full.md \
+  --api-key-file /path/to/DeepSeek-API.md \
+  --model deepseek-v4-flash \
+  --target-language zh-CN \
+  --yes
+```
+
+默认产生：
+
+```text
+paper-mineru/
+├── full.md
+├── images/
+└── translation-zh-CN/
+    ├── full-CN.md
+    ├── .translation-state.json
+    └── images/
+```
+
+`.translation-state.json` 保存分块缓存和 token 用量，不包含 API Key。命令中断后再次执行会复用已完成的翻译块。只有明确需要重新翻译时才使用 `--force`。
+
+常用选项：
+
+```bash
+# 指定独立输出目录
+python3 scripts/translate_markdown.py full.md \
+  -o /path/to/translation-zh-CN --yes
+
+# 使用 source→target JSON 术语表
+python3 scripts/translate_markdown.py full.md \
+  --glossary-file glossary.json --yes
+
+# 默认不翻译参考文献条目；需要时显式开启
+python3 scripts/translate_markdown.py full.md \
+  --translate-references --yes
+
+# 接入其他 OpenAI-compatible 服务
+python3 scripts/translate_markdown.py full.md \
+  --base-url https://provider.example/v1 \
+  --model provider-model-name --thinking auto --yes
+```
+
+翻译脚本只使用 `full.md`。MinerU 的 `content_list.json`、`content_list_v2.json`、`model.json` 和 `layout.json` 不会发送给翻译模型，因为正文信息已经体现在 Markdown 中。
+
 ## 隐私说明
 
-这个 Skill 使用云 API，会把 PDF 上传到 MinerU 官方服务及其签名对象存储。处理未公开论文、合同、个人资料或其他敏感文件前，请确认你有权上传，并阅读 MinerU 的服务协议和隐私政策。
+这个 Skill 使用云 API：PDF 转换会把 PDF 上传到 MinerU 官方服务及其签名对象存储；Markdown 翻译只会把 Markdown 文本发送给配置的翻译服务，不上传原始 PDF 和本地图片。处理未公开论文、合同、个人资料或其他敏感文件前，请确认你有权上传，并阅读对应服务的协议和隐私政策。
 
 如果文件不能离开本机，应使用 MinerU 本地部署方案，而不是这个云 API Skill。
 
