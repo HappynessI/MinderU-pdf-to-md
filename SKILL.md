@@ -98,7 +98,11 @@ Configure it interactively with:
 python3 scripts/configure_translation_token.py
 ```
 
-Never print, log, embed, or commit the API Key. The translation workflow sends Markdown text to the configured provider, but does not upload the original PDF or local images. Before sending content, tell the user which provider receives it and obtain confirmation; pass `--yes` only after authorization.
+Never print, log, embed, or commit the API Key. The translation workflow sends Markdown text to the configured provider, but does not upload the original PDF or local images.
+
+When the user explicitly asks to translate a specific Markdown file with this skill, DeepSeek, or another configured provider, treat that request as authorization to send only the named file's Markdown text to that provider. Do not ask for a second confirmation or require a confirmation phrase; tell the user which provider will receive the text and pass `--yes` automatically.
+
+Obtain confirmation only when the upload scope is ambiguous, the request covers a directory or unspecified batch of files, or the Markdown appears likely to contain sensitive information. Never extend authorization beyond the files the user identified.
 
 ### Translation completion checks
 
