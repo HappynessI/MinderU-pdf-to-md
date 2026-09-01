@@ -32,6 +32,7 @@ class TranslationMockHandler(BaseHTTPRequestHandler):
             return (
                 value.replace("Hello", "你好")
                 .replace("This is text", "这是一段文字")
+                .replace("token", "标记")
                 .replace("Figure caption", "图注")
                 .replace("Table caption", "表题")
                 .replace("APPENDIX", "附录")
@@ -85,7 +86,7 @@ class MarkdownTranslationTests(unittest.TestCase):
         self.source.write_text(
             """# Hello
 
-This is text with $E = mc^2$, `code`, and [site](https://example.com/a).
+This is text with token, $E = mc^2$, `code`, and [site](https://example.com/a).
 
 ![](images/figure.png)
 Figure caption
@@ -140,6 +141,8 @@ Hello again.
             translated = Path(result["markdown_path"]).read_text(encoding="utf-8")
             self.assertIn("# 你好", translated)
             self.assertIn("$E = mc^2$", translated)
+            self.assertIn("with token", translated)
+            self.assertNotIn("标记", translated)
             self.assertIn("[site](https://example.com/a)", translated)
             self.assertIn("![](../images/figure.png)", translated)
             self.assertIn("表题", translated)
@@ -170,6 +173,13 @@ Hello again.
             self.assertTrue(
                 all(
                     "TableCell" not in request[2]["messages"][1]["content"]
+                    for request in server.server.requests
+                )
+            )
+            self.assertTrue(
+                all(
+                    "Do-not-translate terms:" in request[2]["messages"][0]["content"]
+                    and "`token`" in request[2]["messages"][0]["content"]
                     for request in server.server.requests
                 )
             )
@@ -237,6 +247,23 @@ Hello again.
         self.assertEqual(
             translator.read_api_key_file(key_file), "sk-example-secret-123456789"
         )
+
+    def test_do_not_translate_markdown_list_is_loaded_and_protected(self):
+        word_list = self.root / "words.md"
+        word_list.write_text(
+            "# 不翻译词汇表\n\n- `token`\n- EarthGPT\n- `token`\n",
+            encoding="utf-8",
+        )
+        prompt_text, terms, digest = translator.load_do_not_translate(word_list)
+        self.assertEqual(terms, ("token", "EarthGPT"))
+        self.assertEqual(prompt_text, "- `token`\n- `EarthGPT`")
+        self.assertTrue(digest)
+
+        source = "Use token, tokens, and EarthGPT."
+        protected = translator.protect_markdown(source, terms)
+        self.assertNotIn(" token,", protected.text)
+        self.assertIn("tokens", protected.text)
+        self.assertEqual(translator.restore_markdown(protected.text, protected), source)
 
     def test_changed_or_missing_placeholder_is_rejected(self):
         protected = translator.protect_markdown("Text $x+y$ and `code`")

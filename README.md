@@ -18,6 +18,7 @@
 - 支持 DeepSeek 等 OpenAI-compatible 翻译 API，默认模型为 `deepseek-v4-flash`。
 - DeepSeek 翻译默认关闭 thinking，避免把 token 消耗在不必要的推理上。
 - Markdown 按结构分块翻译，支持断点续传、失败重试、术语表和参考文献跳过。
+- 内置简洁的 `do-not-translate.md`，其中列出的词会追加到翻译提示词末尾并保持原文。
 - 结果表格正文默认不翻译，方法名、指标名和数值均保持原样；表题及表格外的说明文字正常翻译。
 - 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签，翻译后校验结构。
 - 默认重写本地图片路径，让英文版和中文版共用同一份图片；需要独立移动中文版目录时可显式复制图片。
@@ -218,6 +219,18 @@ paper-mineru/
 
 翻译时，HTML `<table>` 与 Markdown 管道表格的正文会逐字保留，不发送给翻译模型；表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
 
+### 不翻译词汇表
+
+仓库根目录的 `do-not-translate.md` 是默认的永久保留词汇表，一行一个 Markdown 列表项：
+
+```markdown
+# 不翻译词汇表
+
+- `token`
+```
+
+脚本会把该列表追加到 DeepSeek 的系统提示词末尾，并用占位符保护正文中的精确匹配词，避免模型忽略要求。英文词按完整单词、区分大小写匹配，例如 `token` 会保持不变，但不会误匹配 `tokens`。修改词汇表后再次翻译时，缓存键会随之变化，无需手动使用 `--force`。
+
 常用选项：
 
 ```bash
@@ -232,6 +245,10 @@ python3 scripts/translate_markdown.py full.md \
 # 使用 source→target JSON 术语表
 python3 scripts/translate_markdown.py full.md \
   --glossary-file glossary.json --yes
+
+# 临时改用另一份不翻译词汇表
+python3 scripts/translate_markdown.py full.md \
+  --do-not-translate-file /path/to/words.md --yes
 
 # 默认不翻译参考文献条目；需要时显式开启
 python3 scripts/translate_markdown.py full.md \

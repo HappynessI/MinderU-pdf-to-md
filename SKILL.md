@@ -100,8 +100,9 @@ The translator:
 - leaves bibliography entries unchanged by default and translates the section heading;
 - rewrites local image references so the source and translation share one image directory;
 - copies referenced images only when `--copy-assets` is explicitly requested for a self-contained translation directory.
+- appends `do-not-translate.md` to the translation prompt and protects every listed term so it remains exactly unchanged.
 
-Use `--glossary-file` for document-specific terminology. Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when cached translations must be discarded or the model or language settings have changed.
+Maintain permanent untranslated terms as Markdown bullets in `do-not-translate.md`, one term per item. Use `--do-not-translate-file` to select another list. Use `--glossary-file` for document-specific source-to-target terminology. Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when cached translations must be discarded or the model or language settings have changed.
 
 Verify the translation:
 

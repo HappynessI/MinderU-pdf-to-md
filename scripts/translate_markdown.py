@@ -26,6 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_TARGET_LANGUAGE = "zh-CN"
+DEFAULT_DO_NOT_TRANSLATE_FILE = Path(__file__).resolve().parents[1] / "do-not-translate.md"
 KEYCHAIN_SERVICE = "mineru-markdown-translate"
 STATE_VERSION = 1
 MODEL_ALIASES = {
@@ -205,6 +206,31 @@ def load_glossary(path: Optional[Path]) -> Tuple[str, str]:
     lines = [f"- {source} => {target}" for source, target in payload.items()]
     cleaned = "\n".join(lines)
     return cleaned, sha256_text(cleaned)
+
+
+def load_do_not_translate(path: Optional[Path]) -> Tuple[str, Tuple[str, ...], str]:
+    if path is None:
+        return "", (), ""
+    try:
+        text = path.expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TranslationError(f"无法读取不翻译词汇表：{path}: {exc}") from exc
+
+    terms: List[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        match = re.match(r"^\s*[-*+]\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        term = match.group(1).strip()
+        if len(term) >= 2 and term.startswith("`") and term.endswith("`"):
+            term = term[1:-1].strip()
+        if term and term not in seen:
+            seen.add(term)
+            terms.append(term)
+
+    normalized = "\n".join(f"- `{term}`" for term in terms)
+    return normalized, tuple(terms), sha256_text(normalized)
 
 
 def _block_spans(markdown: str) -> Iterable[str]:
@@ -422,7 +448,9 @@ PROTECTED_PATTERN = re.compile(
 )
 
 
-def protect_markdown(markdown: str) -> ProtectedMarkdown:
+def protect_markdown(
+    markdown: str, do_not_translate_terms: Sequence[str] = ()
+) -> ProtectedMarkdown:
     digest = sha256_text(markdown)[:10].upper()
     prefix = f"__MDT_{digest}_"
     while prefix in markdown:
@@ -434,7 +462,22 @@ def protect_markdown(markdown: str) -> ProtectedMarkdown:
         replacements.append((placeholder, match.group(0)))
         return placeholder
 
-    protected = PROTECTED_PATTERN.sub(replace, markdown)
+    term_patterns: List[str] = []
+    for term in sorted(do_not_translate_terms, key=len, reverse=True):
+        escaped = re.escape(term)
+        if term[0].isascii() and (term[0].isalnum() or term[0] == "_"):
+            escaped = r"(?<![A-Za-z0-9_])" + escaped
+        if term[-1].isascii() and (term[-1].isalnum() or term[-1] == "_"):
+            escaped += r"(?![A-Za-z0-9_])"
+        term_patterns.append(escaped)
+
+    pattern = PROTECTED_PATTERN
+    if term_patterns:
+        pattern = re.compile(
+            PROTECTED_PATTERN.pattern + r"|(?:" + "|".join(term_patterns) + r")",
+            PROTECTED_PATTERN.flags,
+        )
+    protected = pattern.sub(replace, markdown)
     return ProtectedMarkdown(protected, prefix, tuple(replacements))
 
 
@@ -583,6 +626,7 @@ def build_system_prompt(
     source_language: str,
     target_language: str,
     glossary: str,
+    do_not_translate: str,
 ) -> str:
     prompt = f"""You are a professional academic translator.
 Translate the supplied Markdown fragment from {language_name(source_language)} to {language_name(target_language)}.
@@ -597,6 +641,13 @@ Mandatory rules:
 """
     if glossary:
         prompt += "\nRequired terminology:\n" + glossary + "\n"
+    if do_not_translate:
+        prompt += (
+            "\nDo-not-translate terms:\n"
+            "Keep every listed term exactly as written, including capitalization.\n"
+            + do_not_translate
+            + "\n"
+        )
     return prompt
 
 
@@ -635,6 +686,7 @@ def cache_key(
     source_language: str,
     target_language: str,
     glossary_hash: str,
+    do_not_translate_hash: str,
     thinking: str,
     processor_version: str,
 ) -> str:
@@ -645,6 +697,7 @@ def cache_key(
         "source_language": source_language,
         "target_language": target_language,
         "glossary_hash": glossary_hash,
+        "do_not_translate_hash": do_not_translate_hash,
         "thinking": thinking,
     }
     if processor_version:
@@ -789,6 +842,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--api-key-file", type=Path, help="API Key 文件；不会写入输出")
     parser.add_argument("--glossary-file", type=Path, help="可选 JSON 或文本术语表")
+    parser.add_argument(
+        "--do-not-translate-file",
+        type=Path,
+        default=DEFAULT_DO_NOT_TRANSLATE_FILE,
+        help=f"不翻译词汇表，默认 {DEFAULT_DO_NOT_TRANSLATE_FILE}",
+    )
     parser.add_argument("--max-chars", type=int, default=12000, help="每个翻译块的近似字符上限")
     parser.add_argument("--max-output-tokens", type=int, default=8192)
     parser.add_argument(
@@ -846,6 +905,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         state_path = output_dir / ".translation-state.json"
 
         glossary, glossary_hash = load_glossary(args.glossary_file)
+        do_not_translate, do_not_translate_terms, do_not_translate_hash = (
+            load_do_not_translate(args.do_not_translate_file)
+        )
         parts = document_parts(
             markdown,
             target_language=args.target_language,
@@ -879,6 +941,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             source_language=args.source_language,
             target_language=args.target_language,
             glossary=glossary,
+            do_not_translate=do_not_translate,
         )
 
         output_parts: List[str] = []
@@ -897,8 +960,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 source_language=args.source_language,
                 target_language=args.target_language,
                 glossary_hash=glossary_hash,
+                do_not_translate_hash=do_not_translate_hash,
                 thinking=args.thinking,
-                processor_version="preserve-table-bodies-v1",
+                processor_version="preserve-table-bodies-v2-do-not-translate",
             )
             cached = state["chunks"].get(key)
             if isinstance(cached, dict) and isinstance(cached.get("translation"), str):
@@ -907,7 +971,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 eprint(f"复用翻译块 {translated_index}/{translatable_count}")
             else:
                 eprint(f"正在翻译块 {translated_index}/{translatable_count}…")
-                protected = protect_markdown(part.text)
+                protected = protect_markdown(part.text, do_not_translate_terms)
                 last_structure_error: Optional[TranslationError] = None
                 for structure_attempt in range(1, 3):
                     raw_translation, usage = chat_completion(
@@ -971,6 +1035,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "state_path": str(state_path.resolve()),
             "model": model,
             "target_language": args.target_language,
+            "do_not_translate_file": str(args.do_not_translate_file.expanduser().resolve()),
+            "do_not_translate_terms": len(do_not_translate_terms),
             "thinking": args.thinking,
             "translation_chunks": translatable_count,
             "api_calls": api_calls,
