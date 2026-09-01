@@ -65,6 +65,12 @@ $mineru-pdf-to-md 把 /path/to/full.md 翻译成中文，保留公式、表格�
 
 Agent 轻量模式不需要 Token。精准模式需要在 [MinerU API 管理](https://mineru.net/apiManage/docs)中创建 Token。
 
+在 Codex 中，推荐把 Token 保存为全局凭据文件 `~/.codex/api/MinderU-API.md`，调用时传入：
+
+```bash
+--token-file ~/.codex/api/MinderU-API.md
+```
+
 ### macOS Keychain（推荐）
 
 ```bash
@@ -91,6 +97,14 @@ export MINERU_API_TOKEN='你的 Token'
 
 Markdown 翻译默认使用 DeepSeek OpenAI-compatible API 和 `deepseek-v4-flash`。也可以通过 `--base-url` 与 `--model` 接入其他兼容服务。
 
+### 全局凭据文件（Codex 推荐）
+
+把 API Key 保存为 `~/.codex/api/DeepSeek-API.md`，调用时传入：
+
+```bash
+--api-key-file ~/.codex/api/DeepSeek-API.md
+```
+
 ### macOS Keychain（推荐）
 
 ```bash
@@ -111,6 +125,16 @@ export MARKDOWN_TRANSLATION_API_KEY='你的 API Key'
 ```
 
 也兼容 `DEEPSEEK_API_KEY`、`MARKDOWN_TRANSLATION_API_KEY_FILE` 以及命令行参数 `--api-key-file`。密钥只用于请求头，不会写入翻译结果或状态文件。
+
+翻译 API Key 的解析顺序为：
+
+1. `MARKDOWN_TRANSLATION_API_KEY`
+2. `DEEPSEEK_API_KEY`
+3. `--api-key-file` 或 `MARKDOWN_TRANSLATION_API_KEY_FILE`
+4. macOS Keychain 服务 `mineru-markdown-translate`
+5. `~/.config/mineru-pdf-to-md/translation-token`
+
+DeepSeek 默认关闭 thinking。接入其他 OpenAI-compatible 服务时，如果服务不接受 `thinking: disabled` 请求字段，请添加 `--thinking auto`；仅在确实需要额外推理开销时再显式启用 thinking。
 
 ## 独立命令行使用
 
@@ -170,7 +194,7 @@ python3 scripts/mineru_pdf_to_md.py input.pdf -o output \
 
 ```bash
 python3 scripts/translate_markdown.py /path/to/paper-mineru/full.md \
-  --api-key-file /path/to/DeepSeek-API.md \
+  --api-key-file ~/.codex/api/DeepSeek-API.md \
   --model deepseek-v4-flash \
   --target-language zh-CN \
   --yes

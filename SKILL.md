@@ -1,113 +1,112 @@
 ---
 name: mineru-pdf-to-md
-description: Convert local PDFs to structured Markdown with MinerU, and translate structure-heavy Markdown into another language with an OpenAI-compatible API. Use for PDF-to-Markdown conversion, MinerU parsing/OCR, or producing a translated Markdown artifact while preserving formulas, tables, links, and images. Do not use for ordinary document reading when no converted or translated artifact is requested.
+description: Convert local PDFs to structured Markdown with MinerU and translate English Markdown into Chinese with an OpenAI-compatible API; use when a PDF reference should first be converted to Markdown or when English Markdown needs structure-preserving Chinese translation; do not use when reading or translating DOCX, LaTeX, or other document formats the model can handle directly.
 ---
 
 # MinerU PDF to Markdown and Translation
 
 Use the bundled scripts instead of recreating API code. Resolve `scripts/` relative to this skill directory, not the user's current directory.
 
-## PDF to Markdown
+## When to use
 
-```bash
-python3 scripts/mineru_pdf_to_md.py INPUT.pdf -o OUTPUT_DIR --mode auto --yes
-```
+1. A PDF is provided as reference material: convert it to Markdown before reading, analyzing, or citing its contents.
+2. An English Markdown document needs to be translated into Chinese while preserving formulas, tables, links, images, and document structure.
 
-### Routing
+## When not to use
+
+1. Reading DOCX, LaTeX, plain text, or other document formats the model can handle directly.
+2. Translating DOCX, LaTeX, or other directly supported document formats; use their format-specific workflow instead.
+
+## Workflow
+
+### 1. Identify the task
+
+- For a PDF input, continue with PDF conversion.
+- For an English Markdown input, continue with Markdown translation.
+- For DOCX, LaTeX, or another directly supported format, stop using this skill and route to the appropriate document workflow.
+
+### 2. Convert PDF to Markdown
+
+Choose the MinerU mode:
 
 - Use `--mode agent` for the token-free Agent API when the PDF is at most 10 MB and 20 pages and lightweight pipeline output is sufficient.
-- Use `--mode precise` for complex layouts, formulas, tables, OCR, files up to 200 MB or 200 pages, or when the user requests VLM quality. It requires a configured Token.
+- Use `--mode precise` for complex layouts, formulas, tables, OCR, files up to 200 MB or 200 pages, or when the user requests VLM quality.
 - Use `--mode auto` by default: the script selects precise mode when it can resolve a Token, otherwise Agent mode.
 - Add `--ocr` for scanned PDFs or PDFs with a broken text layer. Keep table and formula recognition enabled unless the user asks otherwise.
 
-### Output modes
-
-- Precise mode uses a compact output by default: `full.md`, `*_content_list.json`, and every file under `images/`. Unreferenced images are intentionally retained.
-- Add `--keep-debug-artifacts` only when the user requests complete MinerU output or when diagnosing layout, reading-order, table, formula, or model errors. It retains the returned origin PDF, V2 content list, model output, and layout metadata.
-- Agent mode returns only `full.md` because its API does not provide a result bundle.
-
-### Authorization and privacy
-
-This workflow uploads the source PDF to `mineru.net`. When the user explicitly asks to convert a specific PDF with this skill or MinerU, treat that request as authorization to upload only the named file. Do not ask for a second confirmation; tell the user that MinerU cloud conversion is starting and pass `--yes` automatically.
-
-Obtain confirmation only when the upload scope is ambiguous, the request covers a directory or unspecified batch of files, or the file appears likely to contain sensitive information. Never extend authorization beyond the files the user identified.
-
-Never print, paste, log, commit, or embed the Token. The script resolves it in this order:
-
-1. `MINERU_API_TOKEN`
-2. `--token-file` or `MINERU_API_TOKEN_FILE`
-3. macOS Keychain service `mineru-pdf-to-md`
-4. `~/.config/mineru-pdf-to-md/token`
-
-To configure a Token interactively, run:
+Run:
 
 ```bash
-python3 scripts/configure_token.py
+python3 scripts/mineru_pdf_to_md.py INPUT.pdf \
+  -o OUTPUT_DIR \
+  --mode auto \
+  --token-file ~/.codex/api/MinderU-API.md \
+  --yes
 ```
 
-### Completion checks
+Keep the default compact output:
 
-1. Read the final JSON printed by the client and verify `markdown_path` exists.
-2. Confirm the Markdown is non-empty and that local image links resolve in precise mode.
-3. For complex PDFs, render representative original pages and compare reading order, headings, formulas, tables, figures, and captions against the Markdown.
-4. Report the Markdown path, API mode, and any known extraction limitations.
+```text
+OUTPUT_DIR/
+├── full.md
+├── *_content_list.json
+└── images/
+```
+
+- Precise mode retains every extracted image, including images not referenced by `full.md`.
+- Add `--keep-debug-artifacts` only when the user requests complete MinerU output or when diagnosing layout, reading-order, table, formula, or model errors.
+- Agent mode returns only `full.md` because its API does not provide a result bundle.
+
+Verify the conversion:
+
+1. Read the final JSON and confirm that `markdown_path` exists.
+2. Confirm that the Markdown is non-empty and local image links resolve in precise mode.
+3. For complex PDFs, compare representative original pages with the Markdown for reading order, headings, formulas, tables, figures, and captions.
 
 Read [references/mineru-api.md](references/mineru-api.md) only when changing the client, diagnosing protocol failures, or explaining API limits.
 
-## Markdown translation
+### 3. Translate English Markdown into Chinese
 
-Translate MinerU's `full.md`, or another Markdown document, without using the content-list or layout JSON as model input:
+Translate MinerU's `full.md`, or another Markdown document, without using content-list or layout JSON as model input:
 
 ```bash
 python3 scripts/translate_markdown.py INPUT.md \
   -o TRANSLATION_DIR \
   --target-language zh-CN \
   --model deepseek-v4-flash \
+  --api-key-file ~/.codex/api/DeepSeek-API.md \
   --yes
 ```
 
-The default output for `full.md` is `translation-zh-CN/full-CN.md`. Referenced local images are copied into the translation directory so the translated Markdown remains self-contained. The script does not render a PDF.
+The default result for `full.md` is:
+
+```text
+translation-zh-CN/
+├── full-CN.md
+├── .translation-state.json
+└── images/
+```
 
 The translator:
 
 - chunks at Markdown block boundaries and resumes from `.translation-state.json`;
-- disables DeepSeek thinking by default because bulk translation does not benefit from reasoning tokens;
 - protects formulas, code, image references, link destinations, URLs, and HTML tags;
 - validates placeholder order, heading levels, and HTML table structure;
-- translates figure/table captions and table prose while preserving tags and values;
+- translates figure and table captions while preserving tags and values;
 - leaves bibliography entries unchanged by default and translates the section heading;
-- accepts `--glossary-file` for document-specific terminology.
+- copies referenced local images into the translation directory.
 
-Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when they ask to discard cached translations or when model/language settings have changed and the cache is unsuitable.
+Use `--glossary-file` for document-specific terminology. Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when cached translations must be discarded or the model or language settings have changed.
 
-### Translation API configuration
+Verify the translation:
 
-The default provider is DeepSeek's OpenAI-compatible endpoint with `deepseek-v4-flash`. Override `--base-url` and `--model` for another compatible provider. The API Key is resolved in this order:
+1. Read the final JSON and confirm that `markdown_path` exists under the translation directory.
+2. Confirm that API calls, cache hits, copied asset count, and token usage are plausible.
+3. Verify that every relative image reference resolves from the translated Markdown.
+4. Compare representative headings, formulas, HTML tables, captions, and paragraphs with the source.
 
-Use `--thinking auto` when a non-DeepSeek compatible provider rejects the default `thinking: disabled` request field. Enable thinking only when the user explicitly accepts the additional latency and token usage.
+### 4. Report the result
 
-1. `MARKDOWN_TRANSLATION_API_KEY`
-2. `DEEPSEEK_API_KEY`
-3. `--api-key-file` or `MARKDOWN_TRANSLATION_API_KEY_FILE`
-4. macOS Keychain service `mineru-markdown-translate`
-5. `~/.config/mineru-pdf-to-md/translation-token`
-
-Configure it interactively with:
-
-```bash
-python3 scripts/configure_translation_token.py
-```
-
-Never print, log, embed, or commit the API Key. The translation workflow sends Markdown text to the configured provider, but does not upload the original PDF or local images.
-
-When the user explicitly asks to translate a specific Markdown file with this skill, DeepSeek, or another configured provider, treat that request as authorization to send only the named file's Markdown text to that provider. Do not ask for a second confirmation or require a confirmation phrase; tell the user which provider will receive the text and pass `--yes` automatically.
-
-Obtain confirmation only when the upload scope is ambiguous, the request covers a directory or unspecified batch of files, or the Markdown appears likely to contain sensitive information. Never extend authorization beyond the files the user identified.
-
-### Translation completion checks
-
-1. Read the final JSON and verify `markdown_path` exists under the requested translation directory.
-2. Confirm `api_calls`, `cache_hits`, copied asset count, and token usage are plausible.
-3. Verify every relative image reference resolves from the translated Markdown.
-4. Compare representative headings, formulas, HTML tables, figure captions, and paragraphs with the source.
-5. Report that the artifact is Markdown-only and mention any untranslated bibliography or failed asset references.
+- For PDF conversion, report the Markdown path, MinerU mode, and any known extraction limitations.
+- For translation, report the translated Markdown path, copied assets, untranslated bibliography behavior, and any failed asset references.
+- State that the translation workflow produces Markdown rather than a rendered PDF or DOCX.
