@@ -92,12 +92,12 @@ paper-mineru/
 
 The translator:
 
-- chunks at Markdown block boundaries and resumes from `.translation-state.json`;
+- chunks at Markdown block boundaries, resumes from `.translation-state.json`, and recursively splits only a persistently failing chunk while caching both child and combined results;
 - uses each MinerU table crop as the default translated-document representation when a matching `*_content_list.json` and image are available;
 - falls back to preserving HTML and Markdown table bodies exactly as written when table screenshots are unavailable;
 - translates headings, body prose, figure captions, table captions, and explanatory text outside tables;
 - protects formulas, code, image references, link destinations, URLs, and HTML tags;
-- validates placeholder order and heading levels;
+- allows formulas, inline code, and protected terms to follow target-language word order while requiring the exact same protected-value multiset; image, link, URL, HTML, and fenced-code order remains fixed;
 - leaves bibliography entries unchanged by default and translates the section heading;
 - rewrites local image references so the source and translation share one image directory;
 - copies referenced images only when `--copy-assets` is explicitly requested for a self-contained translation directory.

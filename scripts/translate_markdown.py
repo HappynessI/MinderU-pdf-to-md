@@ -77,6 +77,7 @@ class ProtectedMarkdown:
     text: str
     prefix: str
     replacements: Tuple[Tuple[str, str], ...]
+    ordered_placeholders: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -550,6 +551,14 @@ PROTECTED_PATTERN = re.compile(
 )
 
 
+def _protected_value_may_reorder(value: str, terms: Sequence[str] = ()) -> bool:
+    if value in terms:
+        return True
+    if value.startswith(("$$", r"\[", r"\(", "$")):
+        return True
+    return value.startswith("`") and not value.startswith("```")
+
+
 def protect_markdown(
     markdown: str, do_not_translate_terms: Sequence[str] = ()
 ) -> ProtectedMarkdown:
@@ -558,10 +567,15 @@ def protect_markdown(
     while prefix in markdown:
         prefix += "X"
     replacements: List[Tuple[str, str]] = []
+    ordered_placeholders: List[str] = []
+    terms = tuple(do_not_translate_terms)
 
     def replace(match: re.Match[str]) -> str:
         placeholder = f"{prefix}{len(replacements):05d}__"
-        replacements.append((placeholder, match.group(0)))
+        value = match.group(0)
+        replacements.append((placeholder, value))
+        if not _protected_value_may_reorder(value, terms):
+            ordered_placeholders.append(placeholder)
         return placeholder
 
     term_patterns: List[str] = []
@@ -580,15 +594,25 @@ def protect_markdown(
             PROTECTED_PATTERN.flags,
         )
     protected = pattern.sub(replace, markdown)
-    return ProtectedMarkdown(protected, prefix, tuple(replacements))
+    return ProtectedMarkdown(
+        protected,
+        prefix,
+        tuple(replacements),
+        tuple(ordered_placeholders),
+    )
 
 
 def restore_markdown(translated: str, protected: ProtectedMarkdown) -> str:
     placeholder_pattern = re.compile(re.escape(protected.prefix) + r"\d{5}__")
     expected = [placeholder for placeholder, _value in protected.replacements]
     observed = placeholder_pattern.findall(translated)
-    if observed != expected:
-        raise TranslationError("模型修改、遗漏或重排了 Markdown 保护占位符")
+    if Counter(observed) != Counter(expected):
+        raise TranslationError("模型修改、遗漏或重复了 Markdown 保护占位符")
+    ordered = set(protected.ordered_placeholders)
+    if [value for value in observed if value in ordered] != list(
+        protected.ordered_placeholders
+    ):
+        raise TranslationError("模型重排了图片、链接、HTML 或代码块占位符")
     restored = translated
     for placeholder, value in protected.replacements:
         restored = restored.replace(placeholder, value)
@@ -626,15 +650,16 @@ def validate_final_document(source: str, translated: str) -> None:
         raise TranslationError("最终 Markdown 中残留了保护占位符")
     source_protected = [value for _placeholder, value in protect_markdown(source).replacements]
     target_protected = [value for _placeholder, value in protect_markdown(translated).replacements]
-    is_url = lambda value: value.startswith(("http://", "https://", "mailto:"))
-    source_critical = [value for value in source_protected if not is_url(value)]
-    target_critical = [value for value in target_protected if not is_url(value)]
-    if source_critical != target_critical:
+    if Counter(source_protected) != Counter(target_protected):
         raise TranslationError("最终 Markdown 中的公式、代码、链接、图片或 HTML 结构发生变化")
-    source_urls = Counter(value for value in source_protected if is_url(value))
-    target_urls = Counter(value for value in target_protected if is_url(value))
-    if any(target_urls[value] < count for value, count in source_urls.items()):
-        raise TranslationError("最终 Markdown 遗漏或修改了源文档中的 URL")
+    source_ordered = [
+        value for value in source_protected if not _protected_value_may_reorder(value)
+    ]
+    target_ordered = [
+        value for value in target_protected if not _protected_value_may_reorder(value)
+    ]
+    if source_ordered != target_ordered:
+        raise TranslationError("最终 Markdown 重排了图片、链接、HTML 或代码块")
 
 
 def preserve_outer_whitespace(source: str, translated: str) -> str:
@@ -643,6 +668,71 @@ def preserve_outer_whitespace(source: str, translated: str) -> str:
     assert match is not None
     leading, _core, trailing = match.groups()
     return leading + translated.strip() + trailing
+
+
+def normalize_accidental_term_code_spans(
+    source: str,
+    translated: str,
+    terms: Sequence[str],
+) -> str:
+    """Remove code formatting a model added around otherwise plain protected terms."""
+    normalized = translated
+    for term in terms:
+        if not term or "`" in term:
+            continue
+        pattern = re.compile(r"(?P<fence>`+)" + re.escape(term) + r"(?P=fence)")
+        if pattern.search(source) is None:
+            normalized = pattern.sub(lambda _match: term, normalized)
+    return normalized
+
+
+def normalize_preserved_url_boundaries(source: str, translated: str) -> str:
+    """Keep restored URLs separate from adjacent translated word characters."""
+    urls = {
+        value
+        for _placeholder, value in protect_markdown(source).replacements
+        if value.startswith(("http://", "https://", "mailto:"))
+    }
+    normalized = translated
+    for url in sorted(urls, key=len, reverse=True):
+        normalized = re.sub(
+            re.escape(url) + r"(?=[A-Za-z0-9_\u4e00-\u9fff])",
+            lambda _match: url + " ",
+            normalized,
+        )
+    return normalized
+
+
+def split_failed_translation_chunk(
+    markdown: str,
+    *,
+    minimum_side_chars: int,
+) -> Optional[Tuple[str, str]]:
+    """Split one failing chunk near its midpoint without cutting protected syntax."""
+    midpoint = len(markdown) // 2
+    protected_ranges = [match.span() for match in PROTECTED_PATTERN.finditer(markdown)]
+
+    def allowed(position: int) -> bool:
+        if position <= 0 or position >= len(markdown):
+            return False
+        if len(markdown[:position].strip()) < minimum_side_chars:
+            return False
+        if len(markdown[position:].strip()) < minimum_side_chars:
+            return False
+        return not any(start < position < end for start, end in protected_ranges)
+
+    candidate_groups = [
+        [match.end() for match in re.finditer(r"\n[ \t]*\n", markdown)],
+        [match.end() for match in re.finditer(r"(?<=[.!?。！？])\s+", markdown)],
+        [match.end() for match in re.finditer(r"\n", markdown)],
+        [match.end() for match in re.finditer(r"[ \t]+", markdown)],
+    ]
+    for candidates in candidate_groups:
+        valid = [position for position in candidates if allowed(position)]
+        if valid:
+            position = min(valid, key=lambda value: abs(value - midpoint))
+            return markdown[:position], markdown[position:]
+    return None
 
 
 def _safe_error_detail(raw: bytes, api_key: str) -> str:
@@ -735,7 +825,7 @@ Translate the supplied Markdown fragment from {language_name(source_language)} t
 
 Mandatory rules:
 1. Return only the translated Markdown fragment. Do not add code fences, explanations, summaries, or commentary.
-2. Preserve every placeholder beginning with __MDT_ exactly once and in the original order.
+2. Preserve every placeholder beginning with __MDT_ exactly once. Formula, inline-code, and do-not-translate placeholders may move only when target-language grammar requires it. Never reorder image, link, URL, HTML, or fenced-code placeholders.
 3. Preserve Markdown structure, heading levels, list numbering, paragraph order, and line breaks where practical.
 4. Translate all natural-language prose faithfully without omission, condensation, expansion, or factual correction.
 5. Keep author names, model names, dataset names, citations, variable names, abbreviations, URLs, and numeric values unchanged unless a conventional translated name is unambiguous.
@@ -962,6 +1052,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="MinerU *_content_list.json；默认在输入 Markdown 同目录自动发现",
     )
     parser.add_argument("--max-chars", type=int, default=12000, help="每个翻译块的近似字符上限")
+    parser.add_argument(
+        "--structure-retries",
+        type=int,
+        default=3,
+        help="单块结构失败后的尝试次数；耗尽后自动拆分失败块，默认 3",
+    )
+    parser.add_argument(
+        "--adaptive-min-chars",
+        type=int,
+        default=400,
+        help="自动拆分失败块时每侧保留的最少字符数，默认 400",
+    )
     parser.add_argument("--max-output-tokens", type=int, default=8192)
     parser.add_argument(
         "--thinking",
@@ -993,6 +1095,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.structure_retries < 1:
+            raise TranslationError("--structure-retries 不能小于 1")
+        if args.adaptive_min_chars < 100:
+            raise TranslationError("--adaptive-min-chars 不能小于 100")
         source = args.input.expanduser().resolve()
         if not source.is_file():
             raise TranslationError(f"Markdown 文件不存在：{source}")
@@ -1075,13 +1181,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         translated_index = 0
         api_calls = 0
         cache_hits = 0
-        for part in chunks:
-            if not part.translatable:
-                output_parts.append(part.text)
-                continue
-            translated_index += 1
-            key = cache_key(
-                part.text,
+        adaptive_splits = 0
+
+        def key_for(text: str) -> str:
+            return cache_key(
+                text,
                 base_url=args.base_url,
                 model=model,
                 source_language=args.source_language,
@@ -1091,52 +1195,101 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 thinking=args.thinking,
                 processor_version="table-images-v1-do-not-translate",
             )
+
+        def translate_chunk(text: str, label: str) -> str:
+            nonlocal api_calls, cache_hits, adaptive_splits
+
+            def clean_and_validate(value: str) -> str:
+                value = preserve_outer_whitespace(text, value)
+                value = normalize_accidental_term_code_spans(
+                    text,
+                    value,
+                    do_not_translate_terms,
+                )
+                value = normalize_preserved_url_boundaries(text, value)
+                validate_final_document(text, value)
+                return value
+
+            key = key_for(text)
             cached = state["chunks"].get(key)
             if isinstance(cached, dict) and isinstance(cached.get("translation"), str):
-                translated = preserve_outer_whitespace(part.text, cached["translation"])
-                cache_hits += 1
-                eprint(f"复用翻译块 {translated_index}/{translatable_count}")
-            else:
-                eprint(f"正在翻译块 {translated_index}/{translatable_count}…")
-                protected = protect_markdown(part.text, do_not_translate_terms)
-                last_structure_error: Optional[TranslationError] = None
-                for structure_attempt in range(1, 3):
-                    raw_translation, usage = chat_completion(
-                        base_url=args.base_url,
-                        api_key=api_key,
-                        model=model,
-                        system_prompt=prompt,
-                        markdown=protected.text,
-                        timeout=args.request_timeout,
-                        retries=max(1, args.retries),
-                        max_output_tokens=args.max_output_tokens,
-                        thinking=args.thinking,
-                    )
-                    api_calls += 1
-                    add_usage(state["usage"], usage)
-                    try:
-                        translated = restore_markdown(raw_translation, protected)
-                        validate_structure(part.text, translated)
-                        break
-                    except TranslationError as exc:
-                        last_structure_error = exc
-                        if structure_attempt < 2:
-                            eprint("模型破坏了 Markdown 结构，正在重试该块…")
+                try:
+                    translated = clean_and_validate(cached["translation"])
+                except TranslationError:
+                    eprint(f"翻译块 {label} 的旧缓存未通过新校验，正在重新翻译")
+                    state["chunks"].pop(key, None)
                 else:
+                    cache_hits += 1
+                    eprint(f"复用翻译块 {label}")
+                    return translated
+
+            eprint(f"正在翻译块 {label}…")
+            protected = protect_markdown(text, do_not_translate_terms)
+            last_structure_error: Optional[TranslationError] = None
+            for structure_attempt in range(1, args.structure_retries + 1):
+                raw_translation, usage = chat_completion(
+                    base_url=args.base_url,
+                    api_key=api_key,
+                    model=model,
+                    system_prompt=prompt,
+                    markdown=protected.text,
+                    timeout=args.request_timeout,
+                    retries=max(1, args.retries),
+                    max_output_tokens=args.max_output_tokens,
+                    thinking=args.thinking,
+                )
+                api_calls += 1
+                add_usage(state["usage"], usage)
+                try:
+                    translated = restore_markdown(raw_translation, protected)
+                    translated = clean_and_validate(translated)
+                    break
+                except TranslationError as exc:
+                    last_structure_error = exc
+                    if structure_attempt < args.structure_retries:
+                        eprint(f"翻译块 {label} 结构异常，正在重试…")
+            else:
+                split = split_failed_translation_chunk(
+                    text,
+                    minimum_side_chars=args.adaptive_min_chars,
+                )
+                if split is None:
                     assert last_structure_error is not None
                     raise last_structure_error
+                adaptive_splits += 1
+                eprint(f"翻译块 {label} 持续结构异常，自动拆分为两个子块")
+                left, right = split
+                translated = translate_chunk(left, label + ".1") + translate_chunk(
+                    right, label + ".2"
+                )
+                translated = clean_and_validate(translated)
 
-                translated = preserve_outer_whitespace(part.text, translated)
-                validate_structure(part.text, translated)
+            translated = clean_and_validate(translated)
+            state["chunks"][key] = {
+                "source_sha256": sha256_text(text),
+                "translation": translated,
+            }
+            save_state(state_path, state)
+            return translated
 
-                state["chunks"][key] = {
-                    "source_sha256": sha256_text(part.text),
-                    "translation": translated,
-                }
-                save_state(state_path, state)
-            output_parts.append(translated)
+        for part in chunks:
+            if not part.translatable:
+                output_parts.append(part.text)
+                continue
+            translated_index += 1
+            output_parts.append(
+                translate_chunk(part.text, f"{translated_index}/{translatable_count}")
+            )
 
-        translated_markdown = "".join(output_parts)
+        translated_markdown = normalize_accidental_term_code_spans(
+            translation_source,
+            "".join(output_parts),
+            do_not_translate_terms,
+        )
+        translated_markdown = normalize_preserved_url_boundaries(
+            translation_source,
+            translated_markdown,
+        )
         if not translated_markdown.strip():
             raise TranslationError("翻译结果为空")
         validate_final_document(translation_source, translated_markdown)
@@ -1173,6 +1326,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "do_not_translate_terms": len(do_not_translate_terms),
             "thinking": args.thinking,
             "translation_chunks": translatable_count,
+            "adaptive_splits": adaptive_splits,
             "api_calls": api_calls,
             "cache_hits": cache_hits,
             "asset_mode": state["asset_mode"],

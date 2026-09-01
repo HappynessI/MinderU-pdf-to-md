@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -39,6 +40,11 @@ class TranslationMockHandler(BaseHTTPRequestHandler):
             )
 
         translated = translate(source)
+        threshold = getattr(self.server, "corrupt_over_chars", None)
+        if threshold is not None and len(source) > threshold:
+            placeholder = re.search(r"__MDT_[A-F0-9X]+_\d{5}__", translated)
+            if placeholder:
+                translated = translated.replace(placeholder.group(0), "missing", 1)
         response = json.dumps(
             {
                 "choices": [{"message": {"role": "assistant", "content": translated}}],
@@ -60,9 +66,13 @@ class TranslationMockHandler(BaseHTTPRequestHandler):
 
 
 class MockServer:
+    def __init__(self, *, corrupt_over_chars=None):
+        self.corrupt_over_chars = corrupt_over_chars
+
     def __enter__(self):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), TranslationMockHandler)
         self.server.requests = []
+        self.server.corrupt_over_chars = self.corrupt_over_chars
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         host, port = self.server.server_address
@@ -335,6 +345,89 @@ Hello again.
         self.assertNotIn(" token,", protected.text)
         self.assertIn("tokens", protected.text)
         self.assertEqual(translator.restore_markdown(protected.text, protected), source)
+
+    def test_formula_placeholders_may_reorder_but_images_may_not(self):
+        formulas = translator.protect_markdown("Action $a_t$, state $s_t$.")
+        first, second = [key for key, _value in formulas.replacements]
+        reordered = formulas.text.replace(first, "TEMP", 1).replace(second, first, 1).replace(
+            "TEMP", second, 1
+        )
+        restored = translator.restore_markdown(reordered, formulas)
+        self.assertIn("$s_t$", restored)
+        self.assertIn("$a_t$", restored)
+
+        images = translator.protect_markdown("![](images/a.png)\n![](images/b.png)\n")
+        first, second = [key for key, _value in images.replacements]
+        reordered = images.text.replace(first, "TEMP", 1).replace(second, first, 1).replace(
+            "TEMP", second, 1
+        )
+        with self.assertRaises(translator.TranslationError):
+            translator.restore_markdown(reordered, images)
+
+    def test_final_validation_allows_formula_order_but_not_image_order(self):
+        translator.validate_final_document("$a$ then $b$", "$b$ 然后 $a$")
+        with self.assertRaises(translator.TranslationError):
+            translator.validate_final_document(
+                "![](images/a.png)\n![](images/b.png)",
+                "![](images/b.png)\n![](images/a.png)",
+            )
+
+    def test_failed_chunk_is_split_automatically_and_parent_is_cached(self):
+        source = self.source_dir / "adaptive.md"
+        source.write_text(
+            "# Hello\n\n"
+            + ("This is text with $x$ and enough words to split safely. " * 45)
+            + "\n",
+            encoding="utf-8",
+        )
+        output = self.source_dir / "adaptive-zh"
+        secret = "sk-test-adaptive-split"
+        with MockServer(corrupt_over_chars=900) as server:
+            arguments = [
+                str(source),
+                "--base-url",
+                server.base_url,
+                "--model",
+                "ds-v4-flash",
+                "--max-chars",
+                "5000",
+                "--adaptive-min-chars",
+                "200",
+                "--yes",
+                "-o",
+                str(output),
+            ]
+            code, stdout, stderr = self.run_main(
+                arguments, {"MARKDOWN_TRANSLATION_API_KEY": secret}
+            )
+            self.assertEqual(code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertGreater(result["adaptive_splits"], 0)
+            first_request_count = len(server.server.requests)
+
+            code, stdout, stderr = self.run_main(
+                arguments, {"MARKDOWN_TRANSLATION_API_KEY": secret}
+            )
+            self.assertEqual(code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["api_calls"], 0)
+            self.assertEqual(len(server.server.requests), first_request_count)
+
+    def test_accidental_code_span_is_removed_from_plain_protected_term(self):
+        translated = translator.normalize_accidental_term_code_spans(
+            "A token.",
+            "一个 `token`。",
+            ["token"],
+        )
+        self.assertEqual(translated, "一个 token。")
+
+    def test_preserved_url_is_separated_from_translated_text(self):
+        source = "Code: https://example.com/project."
+        translated = "代码见 https://example.com/project.获取。"
+        self.assertEqual(
+            translator.normalize_preserved_url_boundaries(source, translated),
+            "代码见 https://example.com/project. 获取。",
+        )
 
     def test_changed_or_missing_placeholder_is_rejected(self):
         protected = translator.protect_markdown("Text $x+y$ and `code`")
