@@ -82,9 +82,11 @@ class MarkdownTranslationTests(unittest.TestCase):
         self.source_dir = self.root / "paper-mineru"
         (self.source_dir / "images").mkdir(parents=True)
         (self.source_dir / "images" / "figure.png").write_bytes(b"image")
+        (self.source_dir / "images" / "table.png").write_bytes(b"table-image")
+        self.table_body = "<table><tr><td>TableCell</td><td>42</td></tr></table>"
         self.source = self.source_dir / "full.md"
         self.source.write_text(
-            """# Hello
+            f"""# Hello
 
 This is text with token, $E = mc^2$, `code`, and [site](https://example.com/a).
 
@@ -92,7 +94,7 @@ This is text with token, $E = mc^2$, `code`, and [site](https://example.com/a).
 Figure caption
 
 Table caption
-<table><tr><td>TableCell</td><td>42</td></tr></table>
+{self.table_body}
 
 ## REFERENCES
 
@@ -102,6 +104,19 @@ Smith, A. Hello paper. 2025.
 
 Hello again.
 """,
+            encoding="utf-8",
+        )
+        self.content_list = self.source_dir / "test_content_list.json"
+        self.content_list.write_text(
+            json.dumps(
+                [
+                    {
+                        "type": "table",
+                        "img_path": "images/table.png",
+                        "table_body": self.table_body,
+                    }
+                ]
+            ),
             encoding="utf-8",
         )
 
@@ -145,16 +160,23 @@ Hello again.
             self.assertNotIn("标记", translated)
             self.assertIn("[site](https://example.com/a)", translated)
             self.assertIn("![](../images/figure.png)", translated)
+            self.assertIn("![](../images/table.png)", translated)
             self.assertIn("表题", translated)
-            self.assertIn("<table><tr><td>TableCell</td><td>42</td></tr></table>", translated)
+            self.assertNotIn("<table", translated)
             self.assertIn("## 参考文献", translated)
             self.assertIn("Smith, A. Hello paper. 2025.", translated)
             self.assertIn("## 附录", translated)
             self.assertFalse((output / "images").exists())
             self.assertEqual(result["asset_mode"], "shared")
             self.assertEqual(result["copied_assets"], 0)
-            self.assertEqual(result["shared_assets"], 1)
+            self.assertEqual(result["shared_assets"], 2)
+            self.assertEqual(result["table_mode"], "image")
+            self.assertEqual(result["table_images"], 1)
+            self.assertEqual(
+                Path(result["content_list_path"]), self.content_list.resolve()
+            )
             self.assertTrue((output / "../images/figure.png").resolve().is_file())
+            self.assertTrue((output / "../images/table.png").resolve().is_file())
             state_text = (output / ".translation-state.json").read_text(encoding="utf-8")
             self.assertNotIn(secret, stdout + stderr + state_text)
             self.assertTrue(server.server.requests)
@@ -215,10 +237,59 @@ Hello again.
         result = json.loads(stdout)
         translated = Path(result["markdown_path"]).read_text(encoding="utf-8")
         self.assertIn("![](images/figure.png)", translated)
+        self.assertIn("![](images/table.png)", translated)
         self.assertTrue((output / "images" / "figure.png").is_file())
+        self.assertTrue((output / "images" / "table.png").is_file())
         self.assertEqual(result["asset_mode"], "copied")
-        self.assertEqual(result["copied_assets"], 1)
+        self.assertEqual(result["copied_assets"], 2)
         self.assertEqual(result["shared_assets"], 0)
+
+    def test_table_mode_html_keeps_searchable_table(self):
+        conversion = translator.replace_html_tables_with_images(
+            self.source.read_text(encoding="utf-8"),
+            self.source,
+            table_mode="html",
+            content_list_path=None,
+        )
+        self.assertEqual(conversion.mode, "html")
+        self.assertEqual(conversion.image_count, 0)
+        self.assertIn(self.table_body, conversion.markdown)
+
+    def test_auto_table_mode_falls_back_without_content_list(self):
+        isolated = self.root / "isolated"
+        isolated.mkdir()
+        source = isolated / "paper.md"
+        source.write_text(self.table_body, encoding="utf-8")
+        conversion = translator.replace_html_tables_with_images(
+            self.table_body,
+            source,
+            table_mode="auto",
+            content_list_path=None,
+        )
+        self.assertEqual(conversion.mode, "html")
+        self.assertEqual(conversion.markdown, self.table_body)
+
+    def test_forced_image_mode_rejects_missing_table_image(self):
+        missing = self.source_dir / "missing_content_list.json"
+        missing.write_text(
+            json.dumps(
+                [
+                    {
+                        "type": "table",
+                        "img_path": "images/missing.png",
+                        "table_body": self.table_body,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(translator.TranslationError):
+            translator.replace_html_tables_with_images(
+                self.table_body,
+                self.source,
+                table_mode="image",
+                content_list_path=missing,
+            )
 
     def test_shared_assets_support_custom_output_and_html_images(self):
         output_path = self.root / "custom" / "nested" / "paper-CN.md"

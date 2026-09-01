@@ -20,6 +20,7 @@
 - Markdown 按结构分块翻译，支持断点续传、失败重试、术语表和参考文献跳过。
 - 内置简洁的 `do-not-translate.md`，其中列出的词会追加到翻译提示词末尾并保持原文。
 - 结果表格正文默认不翻译，方法名、指标名和数值均保持原样；表题及表格外的说明文字正常翻译。
+- 精准模式默认把中文版表格替换为 MinerU 原始表格截图，避免 HTML 单元格内公式无法渲染；缺少截图时自动保留原始 HTML。
 - 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签，翻译后校验结构。
 - 默认重写本地图片路径，让英文版和中文版共用同一份图片；需要独立移动中文版目录时可显式复制图片。
 - 带离线 mock 单元测试和 GitHub Actions。
@@ -217,7 +218,9 @@ paper-mineru/
 
 中文版中的图片路径会自动改写为相对于翻译文件的路径（例如 `../images/figure.png`），因此英文版和中文版共用 `paper-mineru/images/`，不会生成重复图片。原有的 `--no-copy-assets` 参数仍可使用，并等同于这一默认行为。若需要把中文版目录单独移动或发送，使用 `--copy-assets`，脚本会保留原图片路径并把 Markdown 实际引用的图片复制到翻译目录。
 
-翻译时，HTML `<table>` 与 Markdown 管道表格的正文会逐字保留，不发送给翻译模型；表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
+翻译时，脚本会在输入 Markdown 同目录自动寻找 `*_content_list.json`。若其中的 `table_body` 与 HTML 表格匹配且 `img_path` 存在，中文版默认用 MinerU 已提取的原始表格截图替换 HTML 表格；图片与英文版共用，不会复制，也不会发送给翻译模型。表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
+
+默认 `--table-mode auto` 在缺少 content list 或表格截图时自动回退为原始 HTML。若更重视表格文字的搜索、选择与复制，可使用 `--table-mode html`；若必须使用截图且不允许回退，可使用 `--table-mode image --content-list /path/to/*_content_list.json`。
 
 ### 不翻译词汇表
 
@@ -250,6 +253,10 @@ python3 scripts/translate_markdown.py full.md \
 python3 scripts/translate_markdown.py full.md \
   --do-not-translate-file /path/to/words.md --yes
 
+# 可选：保留可搜索的原始 HTML 表格
+python3 scripts/translate_markdown.py full.md \
+  --table-mode html --yes
+
 # 默认不翻译参考文献条目；需要时显式开启
 python3 scripts/translate_markdown.py full.md \
   --translate-references --yes
@@ -260,7 +267,7 @@ python3 scripts/translate_markdown.py full.md \
   --model provider-model-name --thinking auto --yes
 ```
 
-翻译脚本只使用 `full.md`。MinerU 的 `content_list.json`、`content_list_v2.json`、`model.json` 和 `layout.json` 不会发送给翻译模型，因为正文信息已经体现在 Markdown 中。
+翻译脚本只把 `full.md` 中可翻译的文本发送给模型。扁平版 `*_content_list.json` 仅在本地用于匹配 `table_body` 与 `img_path`，不会发送给模型；`content_list_v2.json`、`model.json` 和 `layout.json` 也不会发送。
 
 ## 隐私说明
 

@@ -79,6 +79,14 @@ class ProtectedMarkdown:
     replacements: Tuple[Tuple[str, str], ...]
 
 
+@dataclass(frozen=True)
+class TableImageConversion:
+    markdown: str
+    mode: str
+    image_count: int
+    content_list_path: Optional[Path]
+
+
 def eprint(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
@@ -252,6 +260,100 @@ HTML_CAPTION_PATTERN = re.compile(
     r"(<caption\b[^>]*>)(.*?)(</caption\s*>)",
     re.DOTALL | re.IGNORECASE,
 )
+
+
+def _content_list_candidates(source: Path, selected: Optional[Path]) -> List[Path]:
+    if selected is not None:
+        return [selected.expanduser().resolve()]
+    return sorted(source.parent.glob("*_content_list.json"))
+
+
+def _table_image_map(path: Path, source_dir: Path) -> Dict[str, List[str]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TranslationError(f"无法读取 MinerU content list：{path}: {exc}") from exc
+    if not isinstance(payload, list):
+        raise TranslationError(f"MinerU content list 顶层必须是数组：{path}")
+
+    source_root = source_dir.resolve()
+    result: Dict[str, List[str]] = {}
+    for item in payload:
+        if not isinstance(item, dict) or item.get("type") != "table":
+            continue
+        table_body = item.get("table_body")
+        image_path = item.get("img_path")
+        if not isinstance(table_body, str) or not isinstance(image_path, str):
+            continue
+        parsed = urllib.parse.urlsplit(image_path)
+        if parsed.scheme or parsed.netloc or image_path.startswith(("#", "/")):
+            continue
+        relative_text = urllib.parse.unquote(parsed.path)
+        candidate = (source_dir / relative_text).resolve()
+        try:
+            candidate.relative_to(source_root)
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+        encoded_path = urllib.parse.quote(relative_text, safe="/:@-._~")
+        result.setdefault(table_body, []).append(encoded_path)
+    return result
+
+
+def replace_html_tables_with_images(
+    markdown: str,
+    source: Path,
+    *,
+    table_mode: str,
+    content_list_path: Optional[Path],
+) -> TableImageConversion:
+    if table_mode == "html":
+        return TableImageConversion(markdown, "html", 0, None)
+
+    tables = list(HTML_TABLE_PATTERN.finditer(markdown))
+    if not tables:
+        return TableImageConversion(markdown, "html", 0, None)
+
+    errors: List[str] = []
+    for candidate_path in _content_list_candidates(source, content_list_path):
+        if not candidate_path.is_file():
+            errors.append(f"文件不存在：{candidate_path}")
+            continue
+        try:
+            available = _table_image_map(candidate_path, source.parent)
+        except TranslationError as exc:
+            errors.append(str(exc))
+            continue
+
+        replacements: List[str] = []
+        matched = True
+        for table in tables:
+            images = available.get(table.group(0))
+            if not images:
+                matched = False
+                break
+            replacements.append(images.pop(0))
+        if not matched:
+            errors.append(f"表格正文或截图不完整：{candidate_path}")
+            continue
+
+        replacement_iter = iter(replacements)
+        converted = HTML_TABLE_PATTERN.sub(
+            lambda _match: f"![]({next(replacement_iter)})", markdown
+        )
+        return TableImageConversion(
+            converted,
+            "image",
+            len(replacements),
+            candidate_path.resolve(),
+        )
+
+    detail = "；".join(errors) if errors else "未找到 *_content_list.json"
+    if table_mode == "image":
+        raise TranslationError(f"无法把 HTML 表格替换为 MinerU 截图：{detail}")
+    eprint(f"警告：无法使用 MinerU 表格截图，回退为原始 HTML：{detail}")
+    return TableImageConversion(markdown, "html", 0, None)
 
 
 def _is_markdown_table_row(line: str) -> bool:
@@ -848,6 +950,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DO_NOT_TRANSLATE_FILE,
         help=f"不翻译词汇表，默认 {DEFAULT_DO_NOT_TRANSLATE_FILE}",
     )
+    parser.add_argument(
+        "--table-mode",
+        choices=["auto", "image", "html"],
+        default="auto",
+        help="表格输出：auto 优先使用 MinerU 原始截图，image 强制截图，html 保留可搜索 HTML",
+    )
+    parser.add_argument(
+        "--content-list",
+        type=Path,
+        help="MinerU *_content_list.json；默认在输入 Markdown 同目录自动发现",
+    )
     parser.add_argument("--max-chars", type=int, default=12000, help="每个翻译块的近似字符上限")
     parser.add_argument("--max-output-tokens", type=int, default=8192)
     parser.add_argument(
@@ -908,8 +1021,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         do_not_translate, do_not_translate_terms, do_not_translate_hash = (
             load_do_not_translate(args.do_not_translate_file)
         )
-        parts = document_parts(
+        table_conversion = replace_html_tables_with_images(
             markdown,
+            source,
+            table_mode=args.table_mode,
+            content_list_path=args.content_list,
+        )
+        translation_source = table_conversion.markdown
+        parts = document_parts(
+            translation_source,
             target_language=args.target_language,
             translate_references=args.translate_references,
         )
@@ -930,9 +1050,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "version": STATE_VERSION,
                 "source_path": str(source),
                 "source_sha256": sha256_text(markdown),
+                "translation_source_sha256": sha256_text(translation_source),
                 "target_language": args.target_language,
                 "model": model,
                 "base_url": args.base_url,
+                "table_mode": table_conversion.mode,
+                "content_list_path": (
+                    str(table_conversion.content_list_path)
+                    if table_conversion.content_list_path
+                    else None
+                ),
             }
         )
         state.setdefault("chunks", {})
@@ -962,7 +1089,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 glossary_hash=glossary_hash,
                 do_not_translate_hash=do_not_translate_hash,
                 thinking=args.thinking,
-                processor_version="preserve-table-bodies-v2-do-not-translate",
+                processor_version="table-images-v1-do-not-translate",
             )
             cached = state["chunks"].get(key)
             if isinstance(cached, dict) and isinstance(cached.get("translation"), str):
@@ -1012,10 +1139,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         translated_markdown = "".join(output_parts)
         if not translated_markdown.strip():
             raise TranslationError("翻译结果为空")
-        validate_final_document(markdown, translated_markdown)
+        validate_final_document(translation_source, translated_markdown)
         if args.copy_assets:
             output_markdown = translated_markdown
-            copied_assets = copy_assets(markdown, source, output_dir)
+            copied_assets = copy_assets(translated_markdown, source, output_dir)
             shared_assets = 0
         else:
             output_markdown, shared_assets = rewrite_shared_asset_paths(
@@ -1035,6 +1162,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "state_path": str(state_path.resolve()),
             "model": model,
             "target_language": args.target_language,
+            "table_mode": table_conversion.mode,
+            "table_images": table_conversion.image_count,
+            "content_list_path": (
+                str(table_conversion.content_list_path)
+                if table_conversion.content_list_path
+                else None
+            ),
             "do_not_translate_file": str(args.do_not_translate_file.expanduser().resolve()),
             "do_not_translate_terms": len(do_not_translate_terms),
             "thinking": args.thinking,

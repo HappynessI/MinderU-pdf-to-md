@@ -67,7 +67,7 @@ Read [references/mineru-api.md](references/mineru-api.md) only when changing the
 
 ### 3. Translate English Markdown into Chinese
 
-Translate MinerU's `full.md`, or another Markdown document, without using content-list or layout JSON as model input:
+Translate MinerU's `full.md`, or another Markdown document. The flat content list may be read locally to resolve MinerU table screenshots, but it is never sent to the translation model:
 
 ```bash
 python3 scripts/translate_markdown.py INPUT.md \
@@ -93,7 +93,8 @@ paper-mineru/
 The translator:
 
 - chunks at Markdown block boundaries and resumes from `.translation-state.json`;
-- preserves HTML and Markdown table bodies exactly as written instead of sending their cells for translation;
+- uses each MinerU table crop as the default translated-document representation when a matching `*_content_list.json` and image are available;
+- falls back to preserving HTML and Markdown table bodies exactly as written when table screenshots are unavailable;
 - translates headings, body prose, figure captions, table captions, and explanatory text outside tables;
 - protects formulas, code, image references, link destinations, URLs, and HTML tags;
 - validates placeholder order and heading levels;
@@ -102,6 +103,8 @@ The translator:
 - copies referenced images only when `--copy-assets` is explicitly requested for a self-contained translation directory.
 - appends `do-not-translate.md` to the translation prompt and protects every listed term so it remains exactly unchanged.
 
+The default `--table-mode auto` keeps the table visually identical to the paper and avoids raw-HTML math-rendering problems. Use `--table-mode html` only when searchable/selectable table text matters more than exact appearance. Use `--table-mode image --content-list PATH` to require a specific content list and fail rather than fall back.
+
 Maintain permanent untranslated terms as Markdown bullets in `do-not-translate.md`, one term per item. Use `--do-not-translate-file` to select another list. Use `--glossary-file` for document-specific source-to-target terminology. Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when cached translations must be discarded or the model or language settings have changed.
 
 Verify the translation:
@@ -109,7 +112,7 @@ Verify the translation:
 1. Read the final JSON and confirm that `markdown_path` exists under the translation directory.
 2. Confirm that API calls, cache hits, shared or copied asset count, and token usage are plausible.
 3. Verify that every relative image reference resolves from the translated Markdown.
-4. Confirm that representative HTML and Markdown table bodies are unchanged while their captions and surrounding explanations are translated.
+4. Confirm that table images match the original tables and captions remain translated; in HTML fallback mode, confirm table bodies are unchanged.
 5. Compare representative headings, formulas, figure captions, table captions, and paragraphs with the source.
 
 ### 4. Report the result
