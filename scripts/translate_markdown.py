@@ -52,6 +52,13 @@ REFERENCE_HEADINGS = {
     "bibliography",
     "参考文献",
 }
+MARKDOWN_IMAGE_RE = re.compile(
+    r"(!\[[^\]\n]*\]\()(?P<destination><[^>\n]+>|[^\s)]+)(?P<tail>[^)\n]*\))"
+)
+HTML_IMAGE_RE = re.compile(
+    r"(?P<prefix><img\b[^>]*\bsrc\s*=\s*)(?P<quote>[\"'])(?P<destination>.*?)(?P=quote)",
+    re.IGNORECASE,
+)
 
 
 class TranslationError(RuntimeError):
@@ -650,30 +657,27 @@ def add_usage(total: Dict[str, int], current: Dict[str, int]) -> None:
         total[key] = int(total.get(key, 0) or 0) + int(current.get(key, 0) or 0)
 
 
-def local_asset_paths(markdown: str, source_dir: Path) -> List[Tuple[Path, Path]]:
+def local_asset_references(
+    markdown: str, source_dir: Path
+) -> List[Tuple[str, Path, Path]]:
     raw_paths: List[str] = []
     raw_paths.extend(
-        match.group(1).strip("<>")
-        for match in re.finditer(r"!\[[^\]\n]*\]\(([^\s)]+)", markdown)
+        match.group("destination").strip("<>")
+        for match in MARKDOWN_IMAGE_RE.finditer(markdown)
     )
     raw_paths.extend(
-        match.group(2)
-        for match in re.finditer(
-            r"<img\b[^>]*\bsrc\s*=\s*([\"'])(.*?)\1",
-            markdown,
-            re.IGNORECASE,
-        )
+        match.group("destination") for match in HTML_IMAGE_RE.finditer(markdown)
     )
 
     source_root = source_dir.resolve()
-    result: List[Tuple[Path, Path]] = []
+    result: List[Tuple[str, Path, Path]] = []
     seen: set[str] = set()
     for raw in raw_paths:
         parsed = urllib.parse.urlsplit(raw)
         if parsed.scheme or parsed.netloc or raw.startswith(("#", "/")):
             continue
         relative_text = urllib.parse.unquote(parsed.path)
-        if not relative_text or relative_text in seen:
+        if not relative_text or raw in seen:
             continue
         candidate = (source_dir / relative_text).resolve()
         try:
@@ -682,10 +686,20 @@ def local_asset_paths(markdown: str, source_dir: Path) -> List[Tuple[Path, Path]
             eprint(f"警告：跳过源目录之外的资源：{raw}")
             continue
         if candidate.is_file():
-            seen.add(relative_text)
-            result.append((candidate, relative))
+            seen.add(raw)
+            result.append((raw, candidate, relative))
         else:
             eprint(f"警告：Markdown 引用的本地资源不存在：{raw}")
+    return result
+
+
+def local_asset_paths(markdown: str, source_dir: Path) -> List[Tuple[Path, Path]]:
+    result: List[Tuple[Path, Path]] = []
+    seen: set[Path] = set()
+    for _raw, candidate, relative in local_asset_references(markdown, source_dir):
+        if candidate not in seen:
+            seen.add(candidate)
+            result.append((candidate, relative))
     return result
 
 
@@ -698,6 +712,50 @@ def copy_assets(markdown: str, source: Path, output_dir: Path) -> int:
             shutil.copy2(asset, destination)
         count += 1
     return count
+
+
+def rewrite_shared_asset_paths(
+    markdown: str, source: Path, output_path: Path
+) -> Tuple[str, int]:
+    """Point translated image links at the source assets without copying them."""
+    replacements: Dict[str, str] = {}
+    assets: set[Path] = set()
+    output_dir = output_path.parent.resolve()
+    for raw, asset, _relative in local_asset_references(markdown, source.parent):
+        parsed = urllib.parse.urlsplit(raw)
+        relative = Path(os.path.relpath(asset, output_dir)).as_posix()
+        encoded_relative = urllib.parse.quote(relative, safe="/:@-._~")
+        replacements[raw] = urllib.parse.urlunsplit(
+            ("", "", encoded_relative, parsed.query, parsed.fragment)
+        )
+        assets.add(asset)
+
+    def replace_markdown_image(match: re.Match[str]) -> str:
+        destination = match.group("destination")
+        wrapped = destination.startswith("<") and destination.endswith(">")
+        raw = destination[1:-1] if wrapped else destination
+        replacement = replacements.get(raw)
+        if replacement is None:
+            return match.group(0)
+        if wrapped:
+            replacement = f"<{replacement}>"
+        return f"{match.group(1)}{replacement}{match.group('tail')}"
+
+    def replace_html_image(match: re.Match[str]) -> str:
+        replacement = replacements.get(match.group("destination"))
+        if replacement is None:
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{match.group('prefix')}{quote}{replacement}{quote}"
+
+    rewritten = MARKDOWN_IMAGE_RE.sub(replace_markdown_image, markdown)
+    rewritten = HTML_IMAGE_RE.sub(replace_html_image, rewritten)
+
+    for replacement in replacements.values():
+        path = urllib.parse.unquote(urllib.parse.urlsplit(replacement).path)
+        if not (output_dir / path).resolve().is_file():
+            raise TranslationError(f"重写后的本地资源无法解析：{replacement}")
+    return rewritten, len(assets)
 
 
 def confirm_cloud_translation(args: argparse.Namespace, source: Path) -> None:
@@ -742,7 +800,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-timeout", type=float, default=180.0)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--translate-references", action="store_true", help="同时翻译参考文献条目")
-    parser.add_argument("--no-copy-assets", action="store_true", help="不复制 Markdown 引用的本地资源")
+    asset_group = parser.add_mutually_exclusive_group()
+    asset_group.add_argument(
+        "--copy-assets",
+        action="store_true",
+        help="把 Markdown 引用的本地资源复制到翻译目录，生成可独立移动的副本",
+    )
+    asset_group.add_argument(
+        "--no-copy-assets",
+        action="store_false",
+        dest="copy_assets",
+        help="兼容选项；不复制资源并重写链接（当前默认行为）",
+    )
+    parser.set_defaults(copy_assets=False)
     parser.add_argument("--force", action="store_true", help="忽略已有翻译缓存并重新调用 API")
     parser.add_argument("--yes", action="store_true", help="确认把 Markdown 文本发送到云端翻译 API")
     return parser
@@ -879,10 +949,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not translated_markdown.strip():
             raise TranslationError("翻译结果为空")
         validate_final_document(markdown, translated_markdown)
-        atomic_write_text(output_path, translated_markdown)
-        copied_assets = 0 if args.no_copy_assets else copy_assets(markdown, source, output_dir)
+        if args.copy_assets:
+            output_markdown = translated_markdown
+            copied_assets = copy_assets(markdown, source, output_dir)
+            shared_assets = 0
+        else:
+            output_markdown, shared_assets = rewrite_shared_asset_paths(
+                translated_markdown, source, output_path
+            )
+            copied_assets = 0
+        atomic_write_text(output_path, output_markdown)
         state["completed"] = True
         state["output_path"] = str(output_path.resolve())
+        state["asset_mode"] = "copied" if args.copy_assets else "shared"
         save_state(state_path, state)
 
         result = {
@@ -896,7 +975,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "translation_chunks": translatable_count,
             "api_calls": api_calls,
             "cache_hits": cache_hits,
+            "asset_mode": state["asset_mode"],
             "copied_assets": copied_assets,
+            "shared_assets": shared_assets,
             "usage": state.get("usage", {}),
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))

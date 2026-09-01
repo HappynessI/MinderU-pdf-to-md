@@ -2,7 +2,7 @@
 
 一个可复用的 Codex Skill：通过 [MinerU 官方云 API](https://mineru.net/apiManage/docs) 将本地 PDF 转换为结构化 Markdown，并可通过 OpenAI-compatible 文本模型把 Markdown 翻译成中文或其他语言。
 
-它适合论文、扫描件、双栏文档、公式、表格和复杂版式。翻译阶段直接处理 `full.md`：正文、标题、图注和表题会翻译，HTML 与 Markdown 表格正文保持原样，同时保留公式、链接和图片引用。输出为独立的翻译 Markdown 文件夹，不重新渲染 PDF。
+它适合论文、扫描件、双栏文档、公式、表格和复杂版式。翻译阶段直接处理 `full.md`：正文、标题、图注和表题会翻译，HTML 与 Markdown 表格正文保持原样，同时保留公式、链接和图片引用。输出放在单独的翻译子目录中，不重新渲染 PDF。
 
 > 记得关闭代理登录 MinerU 获得 API。
 
@@ -20,7 +20,7 @@
 - Markdown 按结构分块翻译，支持断点续传、失败重试、术语表和参考文献跳过。
 - 结果表格正文默认不翻译，方法名、指标名和数值均保持原样；表题及表格外的说明文字正常翻译。
 - 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签，翻译后校验结构。
-- 将 Markdown 实际引用的本地图片复制到翻译目录，生成可独立移动的中文版 Markdown 文件夹。
+- 默认重写本地图片路径，让英文版和中文版共用同一份图片；需要独立移动中文版目录时可显式复制图片。
 - 带离线 mock 单元测试和 GitHub Actions。
 
 ## API 模式
@@ -209,11 +209,12 @@ paper-mineru/
 ├── images/
 └── translation-zh-CN/
     ├── full-CN.md
-    ├── .translation-state.json
-    └── images/
+    └── .translation-state.json
 ```
 
 `.translation-state.json` 保存分块缓存和 token 用量，不包含 API Key。命令中断后再次执行会复用已完成的翻译块。只有明确需要重新翻译时才使用 `--force`。
+
+中文版中的图片路径会自动改写为相对于翻译文件的路径（例如 `../images/figure.png`），因此英文版和中文版共用 `paper-mineru/images/`，不会生成重复图片。原有的 `--no-copy-assets` 参数仍可使用，并等同于这一默认行为。若需要把中文版目录单独移动或发送，使用 `--copy-assets`，脚本会保留原图片路径并把 Markdown 实际引用的图片复制到翻译目录。
 
 翻译时，HTML `<table>` 与 Markdown 管道表格的正文会逐字保留，不发送给翻译模型；表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
 
@@ -223,6 +224,10 @@ paper-mineru/
 # 指定独立输出目录
 python3 scripts/translate_markdown.py full.md \
   -o /path/to/translation-zh-CN --yes
+
+# 可选：复制引用图片，生成可独立移动的翻译目录
+python3 scripts/translate_markdown.py full.md \
+  --copy-assets --yes
 
 # 使用 source→target JSON 术语表
 python3 scripts/translate_markdown.py full.md \

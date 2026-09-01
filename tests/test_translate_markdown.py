@@ -115,7 +115,7 @@ Hello again.
                 code = translator.main(arguments)
         return code, stdout.getvalue(), stderr.getvalue()
 
-    def test_translation_preserves_structure_skips_references_and_copies_assets(self):
+    def test_translation_preserves_structure_and_shares_source_assets(self):
         secret = "sk-test-secret-that-must-not-leak"
         output = self.source_dir / "translation-zh-CN"
         with MockServer() as server:
@@ -141,13 +141,17 @@ Hello again.
             self.assertIn("# 你好", translated)
             self.assertIn("$E = mc^2$", translated)
             self.assertIn("[site](https://example.com/a)", translated)
-            self.assertIn("![](images/figure.png)", translated)
+            self.assertIn("![](../images/figure.png)", translated)
             self.assertIn("表题", translated)
             self.assertIn("<table><tr><td>TableCell</td><td>42</td></tr></table>", translated)
             self.assertIn("## 参考文献", translated)
             self.assertIn("Smith, A. Hello paper. 2025.", translated)
             self.assertIn("## 附录", translated)
-            self.assertTrue((output / "images" / "figure.png").is_file())
+            self.assertFalse((output / "images").exists())
+            self.assertEqual(result["asset_mode"], "shared")
+            self.assertEqual(result["copied_assets"], 0)
+            self.assertEqual(result["shared_assets"], 1)
+            self.assertTrue((output / "../images/figure.png").resolve().is_file())
             state_text = (output / ".translation-state.json").read_text(encoding="utf-8")
             self.assertNotIn(secret, stdout + stderr + state_text)
             self.assertTrue(server.server.requests)
@@ -179,6 +183,46 @@ Hello again.
             self.assertEqual(result["api_calls"], 0)
             self.assertGreater(result["cache_hits"], 0)
             self.assertEqual(len(server.server.requests), first_request_count)
+
+    def test_copy_assets_keeps_translation_directory_self_contained(self):
+        output = self.source_dir / "translation-copy"
+        with MockServer() as server:
+            code, stdout, stderr = self.run_main(
+                [
+                    str(self.source),
+                    "--base-url",
+                    server.base_url,
+                    "--model",
+                    "ds-v4-flash",
+                    "--copy-assets",
+                    "--yes",
+                    "-o",
+                    str(output),
+                ],
+                {"MARKDOWN_TRANSLATION_API_KEY": "sk-test-secret-copy-assets"},
+            )
+        self.assertEqual(code, 0, stderr)
+        result = json.loads(stdout)
+        translated = Path(result["markdown_path"]).read_text(encoding="utf-8")
+        self.assertIn("![](images/figure.png)", translated)
+        self.assertTrue((output / "images" / "figure.png").is_file())
+        self.assertEqual(result["asset_mode"], "copied")
+        self.assertEqual(result["copied_assets"], 1)
+        self.assertEqual(result["shared_assets"], 0)
+
+    def test_shared_assets_support_custom_output_and_html_images(self):
+        output_path = self.root / "custom" / "nested" / "paper-CN.md"
+        source_markdown = (
+            "![](images/figure.png)\n"
+            '<img class="figure" src="images/figure.png" alt="figure">\n'
+        )
+        rewritten, count = translator.rewrite_shared_asset_paths(
+            source_markdown, self.source, output_path
+        )
+        expected = "../../paper-mineru/images/figure.png"
+        self.assertIn(f"![]({expected})", rewritten)
+        self.assertIn(f'src="{expected}"', rewritten)
+        self.assertEqual(count, 1)
 
     def test_noninteractive_translation_requires_yes(self):
         output = self.source_dir / "blocked"

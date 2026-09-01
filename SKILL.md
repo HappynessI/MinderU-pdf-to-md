@@ -78,13 +78,16 @@ python3 scripts/translate_markdown.py INPUT.md \
   --yes
 ```
 
-The default result for `full.md` is:
+The default result for `full.md` shares the source image directory instead of
+duplicating it:
 
 ```text
-translation-zh-CN/
-├── full-CN.md
-├── .translation-state.json
-└── images/
+paper-mineru/
+├── full.md
+├── images/
+└── translation-zh-CN/
+    ├── full-CN.md
+    └── .translation-state.json
 ```
 
 The translator:
@@ -95,14 +98,15 @@ The translator:
 - protects formulas, code, image references, link destinations, URLs, and HTML tags;
 - validates placeholder order and heading levels;
 - leaves bibliography entries unchanged by default and translates the section heading;
-- copies referenced local images into the translation directory.
+- rewrites local image references so the source and translation share one image directory;
+- copies referenced images only when `--copy-assets` is explicitly requested for a self-contained translation directory.
 
 Use `--glossary-file` for document-specific terminology. Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when cached translations must be discarded or the model or language settings have changed.
 
 Verify the translation:
 
 1. Read the final JSON and confirm that `markdown_path` exists under the translation directory.
-2. Confirm that API calls, cache hits, copied asset count, and token usage are plausible.
+2. Confirm that API calls, cache hits, shared or copied asset count, and token usage are plausible.
 3. Verify that every relative image reference resolves from the translated Markdown.
 4. Confirm that representative HTML and Markdown table bodies are unchanged while their captions and surrounding explanations are translated.
 5. Compare representative headings, formulas, figure captions, table captions, and paragraphs with the source.
@@ -110,5 +114,5 @@ Verify the translation:
 ### 4. Report the result
 
 - For PDF conversion, report the Markdown path, MinerU mode, and any known extraction limitations.
-- For translation, report the translated Markdown path, copied assets, preserved table bodies, untranslated bibliography behavior, and any failed asset references.
+- For translation, report the translated Markdown path, shared or copied assets, preserved table bodies, untranslated bibliography behavior, and any failed asset references.
 - State that the translation workflow produces Markdown rather than a rendered PDF or DOCX.
