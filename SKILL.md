@@ -1,6 +1,6 @@
 ---
 name: mineru-pdf-to-md
-description: Convert local PDFs to structured Markdown with MinerU and translate English Markdown into Chinese with an OpenAI-compatible API; use when a PDF reference should first be converted to Markdown or when English Markdown needs structure-preserving Chinese translation; do not use when reading or translating DOCX, LaTeX, or other document formats the model can handle directly.
+description: Convert local PDFs to structured Markdown with MinerU and translate English Markdown into Chinese with an OpenAI-compatible API; use when a PDF reference should first be converted to Markdown or when English Markdown needs Chinese translation while keeping result-table bodies unchanged; do not use when reading or translating DOCX, LaTeX, or other document formats the model can handle directly.
 ---
 
 # MinerU PDF to Markdown and Translation
@@ -10,7 +10,7 @@ Use the bundled scripts instead of recreating API code. Resolve `scripts/` relat
 ## When to use
 
 1. A PDF is provided as reference material: convert it to Markdown before reading, analyzing, or citing its contents.
-2. An English Markdown document needs to be translated into Chinese while preserving formulas, tables, links, images, and document structure.
+2. An English Markdown document needs to be translated into Chinese while preserving formulas, links, images, document structure, and the original contents of result tables.
 
 ## When not to use
 
@@ -90,9 +90,10 @@ translation-zh-CN/
 The translator:
 
 - chunks at Markdown block boundaries and resumes from `.translation-state.json`;
+- preserves HTML and Markdown table bodies exactly as written instead of sending their cells for translation;
+- translates headings, body prose, figure captions, table captions, and explanatory text outside tables;
 - protects formulas, code, image references, link destinations, URLs, and HTML tags;
-- validates placeholder order, heading levels, and HTML table structure;
-- translates figure and table captions while preserving tags and values;
+- validates placeholder order and heading levels;
 - leaves bibliography entries unchanged by default and translates the section heading;
 - copies referenced local images into the translation directory.
 
@@ -103,10 +104,11 @@ Verify the translation:
 1. Read the final JSON and confirm that `markdown_path` exists under the translation directory.
 2. Confirm that API calls, cache hits, copied asset count, and token usage are plausible.
 3. Verify that every relative image reference resolves from the translated Markdown.
-4. Compare representative headings, formulas, HTML tables, captions, and paragraphs with the source.
+4. Confirm that representative HTML and Markdown table bodies are unchanged while their captions and surrounding explanations are translated.
+5. Compare representative headings, formulas, figure captions, table captions, and paragraphs with the source.
 
 ### 4. Report the result
 
 - For PDF conversion, report the Markdown path, MinerU mode, and any known extraction limitations.
-- For translation, report the translated Markdown path, copied assets, untranslated bibliography behavior, and any failed asset references.
+- For translation, report the translated Markdown path, copied assets, preserved table bodies, untranslated bibliography behavior, and any failed asset references.
 - State that the translation workflow produces Markdown rather than a rendered PDF or DOCX.

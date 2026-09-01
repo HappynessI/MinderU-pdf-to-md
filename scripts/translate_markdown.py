@@ -214,6 +214,96 @@ def _block_spans(markdown: str) -> Iterable[str]:
         yield markdown[position:]
 
 
+HTML_TABLE_PATTERN = re.compile(r"<table\b[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE)
+HTML_CAPTION_PATTERN = re.compile(
+    r"(<caption\b[^>]*>)(.*?)(</caption\s*>)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _is_markdown_table_row(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and "|" in stripped
+
+
+def _is_markdown_table_separator(line: str) -> bool:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    cells = [cell.strip() for cell in stripped.split("|")]
+    return len(cells) >= 2 and all(
+        re.fullmatch(r":?-{3,}:?", cell) is not None for cell in cells
+    )
+
+
+def _markdown_table_spans(markdown: str) -> List[Tuple[int, int]]:
+    lines = markdown.splitlines(keepends=True)
+    offsets: List[int] = []
+    position = 0
+    for line in lines:
+        offsets.append(position)
+        position += len(line)
+
+    spans: List[Tuple[int, int]] = []
+    index = 0
+    while index + 1 < len(lines):
+        if not (
+            _is_markdown_table_row(lines[index])
+            and _is_markdown_table_separator(lines[index + 1])
+        ):
+            index += 1
+            continue
+
+        end_index = index + 2
+        while end_index < len(lines) and _is_markdown_table_row(lines[end_index]):
+            end_index += 1
+        start = offsets[index]
+        end = offsets[end_index] if end_index < len(lines) else len(markdown)
+        spans.append((start, end))
+        index = end_index
+    return spans
+
+
+def _table_spans(markdown: str) -> List[Tuple[int, int]]:
+    spans = [(match.start(), match.end()) for match in HTML_TABLE_PATTERN.finditer(markdown)]
+    spans.extend(_markdown_table_spans(markdown))
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _split_table_segments(markdown: str) -> Iterable[Tuple[str, bool]]:
+    """Yield exact text segments with table bodies marked non-translatable."""
+    position = 0
+    for start, end in _table_spans(markdown):
+        if start > position:
+            yield markdown[position:start], True
+        table = markdown[start:end]
+        if table.lstrip().lower().startswith("<table"):
+            table_position = 0
+            for caption in HTML_CAPTION_PATTERN.finditer(table):
+                if caption.start() > table_position:
+                    yield table[table_position:caption.start()], False
+                yield caption.group(1), False
+                if caption.group(2):
+                    yield caption.group(2), True
+                yield caption.group(3), False
+                table_position = caption.end()
+            if table_position < len(table):
+                yield table[table_position:], False
+        else:
+            yield table, False
+        position = end
+    if position < len(markdown):
+        yield markdown[position:], True
+
+
 def _heading(block: str) -> Optional[Tuple[int, str]]:
     match = re.match(r"^[ \t]*(#{1,6})[ \t]+(.+?)[ \t]*(?:\n|$)", block)
     if not match:
@@ -264,7 +354,16 @@ def document_parts(
         stripped = block.strip()
         is_frontmatter = index == 0 and stripped.startswith("---") and stripped.endswith("---")
         translatable = bool(stripped) and reference_level is None and not is_frontmatter
-        parts.append(DocumentPart(block, translatable))
+        if not translatable:
+            parts.append(DocumentPart(block, False))
+            continue
+        for segment, segment_translatable in _split_table_segments(block):
+            parts.append(
+                DocumentPart(
+                    segment,
+                    segment_translatable and bool(segment.strip()),
+                )
+            )
     return parts
 
 
@@ -284,13 +383,6 @@ def chunk_document(parts: Sequence[DocumentPart], max_chars: int) -> List[Docume
 
     for part in parts:
         if not part.translatable:
-            flush()
-            result.append(part)
-            continue
-        if "<table" in part.text.lower():
-            # Large MinerU HTML tables contain hundreds of protected tags. Keep
-            # each table isolated so the model never has to preserve several
-            # unrelated tables in one response.
             flush()
             result.append(part)
             continue
@@ -491,7 +583,7 @@ Translate the supplied Markdown fragment from {language_name(source_language)} t
 Mandatory rules:
 1. Return only the translated Markdown fragment. Do not add code fences, explanations, summaries, or commentary.
 2. Preserve every placeholder beginning with __MDT_ exactly once and in the original order.
-3. Preserve Markdown structure, heading levels, list numbering, paragraph order, HTML table structure, and line breaks where practical.
+3. Preserve Markdown structure, heading levels, list numbering, paragraph order, and line breaks where practical.
 4. Translate all natural-language prose faithfully without omission, condensation, expansion, or factual correction.
 5. Keep author names, model names, dataset names, citations, variable names, abbreviations, URLs, and numeric values unchanged unless a conventional translated name is unambiguous.
 6. Use concise, publication-quality academic language and consistent terminology.
@@ -499,109 +591,6 @@ Mandatory rules:
     if glossary:
         prompt += "\nRequired terminology:\n" + glossary + "\n"
     return prompt
-
-
-def is_html_table_fragment(markdown: str) -> bool:
-    return bool(re.fullmatch(r"\s*<table\b.*</table>\s*", markdown, re.DOTALL | re.IGNORECASE))
-
-
-def translate_html_table(
-    source: str,
-    *,
-    base_url: str,
-    api_key: str,
-    model: str,
-    source_language: str,
-    target_language: str,
-    glossary: str,
-    timeout: float,
-    retries: int,
-    max_output_tokens: int,
-    thinking: str,
-) -> Tuple[str, Dict[str, int], int]:
-    """Translate visible table text as an ID-addressed JSON batch."""
-    pieces = re.split(r"(<[^>]+>)", source)
-    nodes: List[Tuple[int, str, str, ProtectedMarkdown]] = []
-    for index, piece in enumerate(pieces):
-        if not piece or piece.startswith("<"):
-            continue
-        match = re.fullmatch(r"(\s*)(.*?)(\s*)", piece, re.DOTALL)
-        assert match is not None
-        leading, content, trailing = match.groups()
-        if not content or not re.search(r"[A-Za-z\u4e00-\u9fff]", content):
-            continue
-        stripped = content.strip()
-        if re.fullmatch(r"[A-Z][A-Z0-9._/+\-]{1,15}", stripped):
-            continue
-        if "." in stripped and re.fullmatch(
-            r"[A-Za-z]{1,8}\.(?:\s+[A-Za-z]{1,8}\.)*", stripped
-        ):
-            continue
-        nodes.append((index, leading, trailing, protect_markdown(content)))
-
-    if not nodes:
-        return source, {}, 0
-
-    request_payload = {
-        "cells": [
-            {"id": cell_id, "text": protected.text}
-            for cell_id, (_index, _leading, _trailing, protected) in enumerate(nodes)
-        ]
-    }
-    table_prompt = f"""You are a professional academic table translator.
-Translate every `text` value in the supplied JSON from {language_name(source_language)} to {language_name(target_language)}.
-Return only strict JSON in this exact shape: {{"translations":[{{"id":0,"text":"..."}}]}}.
-Keep exactly the same integer IDs in the same order. Do not omit, merge, or add entries.
-Preserve every __MDT_ placeholder exactly once and in its original position within that entry.
-Keep model names, dataset names, abbreviations, citations, variables, and numeric values unchanged.
-Use neighboring cells for context and concise publication-quality terminology.
-"""
-    if glossary:
-        table_prompt += "\nRequired terminology:\n" + glossary + "\n"
-
-    total_usage: Dict[str, int] = {}
-    api_calls = 0
-    last_error: Optional[TranslationError] = None
-    for structure_attempt in range(1, 3):
-        raw, usage = chat_completion(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            system_prompt=table_prompt,
-            markdown=json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")),
-            timeout=timeout,
-            retries=retries,
-            max_output_tokens=max_output_tokens,
-            thinking=thinking,
-        )
-        api_calls += 1
-        add_usage(total_usage, usage)
-        try:
-            decoded = json.loads(raw)
-            translations = decoded["translations"]
-            if not isinstance(translations, list):
-                raise TranslationError("表格翻译响应的 translations 不是数组")
-            observed_ids = [item.get("id") for item in translations if isinstance(item, dict)]
-            expected_ids = list(range(len(nodes)))
-            if observed_ids != expected_ids or len(translations) != len(nodes):
-                raise TranslationError("表格翻译响应遗漏、增加或重排了单元格")
-
-            translated_pieces = list(pieces)
-            for item, (piece_index, leading, trailing, protected) in zip(translations, nodes):
-                value = item.get("text")
-                if not isinstance(value, str):
-                    raise TranslationError("表格翻译响应包含非文本单元格")
-                translated_pieces[piece_index] = leading + restore_markdown(value, protected) + trailing
-            translated = "".join(translated_pieces)
-            validate_structure(source, translated)
-            return translated, total_usage, api_calls
-        except (json.JSONDecodeError, KeyError, TypeError, TranslationError) as exc:
-            last_error = exc if isinstance(exc, TranslationError) else TranslationError("表格翻译 API 返回了无效 JSON")
-            if structure_attempt < 2:
-                eprint("模型返回的表格单元格结构无效，正在重试该表格…")
-
-    assert last_error is not None
-    raise last_error
 
 
 def load_state(path: Path) -> Dict[str, Any]:
@@ -839,9 +828,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 target_language=args.target_language,
                 glossary_hash=glossary_hash,
                 thinking=args.thinking,
-                processor_version=(
-                    "html-table-v2" if is_html_table_fragment(part.text) else ""
-                ),
+                processor_version="preserve-table-bodies-v1",
             )
             cached = state["chunks"].get(key)
             if isinstance(cached, dict) and isinstance(cached.get("translation"), str):
@@ -850,50 +837,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 eprint(f"复用翻译块 {translated_index}/{translatable_count}")
             else:
                 eprint(f"正在翻译块 {translated_index}/{translatable_count}…")
-                if is_html_table_fragment(part.text):
-                    translated, usage, table_api_calls = translate_html_table(
-                        part.text,
+                protected = protect_markdown(part.text)
+                last_structure_error: Optional[TranslationError] = None
+                for structure_attempt in range(1, 3):
+                    raw_translation, usage = chat_completion(
                         base_url=args.base_url,
                         api_key=api_key,
                         model=model,
-                        source_language=args.source_language,
-                        target_language=args.target_language,
-                        glossary=glossary,
+                        system_prompt=prompt,
+                        markdown=protected.text,
                         timeout=args.request_timeout,
                         retries=max(1, args.retries),
                         max_output_tokens=args.max_output_tokens,
                         thinking=args.thinking,
                     )
-                    api_calls += table_api_calls
+                    api_calls += 1
                     add_usage(state["usage"], usage)
+                    try:
+                        translated = restore_markdown(raw_translation, protected)
+                        validate_structure(part.text, translated)
+                        break
+                    except TranslationError as exc:
+                        last_structure_error = exc
+                        if structure_attempt < 2:
+                            eprint("模型破坏了 Markdown 结构，正在重试该块…")
                 else:
-                    protected = protect_markdown(part.text)
-                    last_structure_error: Optional[TranslationError] = None
-                    for structure_attempt in range(1, 3):
-                        raw_translation, usage = chat_completion(
-                            base_url=args.base_url,
-                            api_key=api_key,
-                            model=model,
-                            system_prompt=prompt,
-                            markdown=protected.text,
-                            timeout=args.request_timeout,
-                            retries=max(1, args.retries),
-                            max_output_tokens=args.max_output_tokens,
-                            thinking=args.thinking,
-                        )
-                        api_calls += 1
-                        add_usage(state["usage"], usage)
-                        try:
-                            translated = restore_markdown(raw_translation, protected)
-                            validate_structure(part.text, translated)
-                            break
-                        except TranslationError as exc:
-                            last_structure_error = exc
-                            if structure_attempt < 2:
-                                eprint("模型破坏了 Markdown 结构，正在重试该块…")
-                    else:
-                        assert last_structure_error is not None
-                        raise last_structure_error
+                    assert last_structure_error is not None
+                    raise last_structure_error
 
                 translated = preserve_outer_whitespace(part.text, translated)
                 validate_structure(part.text, translated)

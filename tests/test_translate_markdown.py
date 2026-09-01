@@ -33,22 +33,11 @@ class TranslationMockHandler(BaseHTTPRequestHandler):
                 value.replace("Hello", "你好")
                 .replace("This is text", "这是一段文字")
                 .replace("Figure caption", "图注")
+                .replace("Table caption", "表题")
                 .replace("APPENDIX", "附录")
             )
 
-        if "table translator" in payload["messages"][0]["content"]:
-            cells = json.loads(source)["cells"]
-            translated = json.dumps(
-                {
-                    "translations": [
-                        {"id": cell["id"], "text": translate(cell["text"])}
-                        for cell in cells
-                    ]
-                },
-                ensure_ascii=False,
-            )
-        else:
-            translated = translate(source)
+        translated = translate(source)
         response = json.dumps(
             {
                 "choices": [{"message": {"role": "assistant", "content": translated}}],
@@ -101,7 +90,8 @@ This is text with $E = mc^2$, `code`, and [site](https://example.com/a).
 ![](images/figure.png)
 Figure caption
 
-<table><tr><td>Hello</td><td>42</td></tr></table>
+Table caption
+<table><tr><td>TableCell</td><td>42</td></tr></table>
 
 ## REFERENCES
 
@@ -152,7 +142,8 @@ Hello again.
             self.assertIn("$E = mc^2$", translated)
             self.assertIn("[site](https://example.com/a)", translated)
             self.assertIn("![](images/figure.png)", translated)
-            self.assertIn("<table><tr><td>你好</td><td>42</td></tr></table>", translated)
+            self.assertIn("表题", translated)
+            self.assertIn("<table><tr><td>TableCell</td><td>42</td></tr></table>", translated)
             self.assertIn("## 参考文献", translated)
             self.assertIn("Smith, A. Hello paper. 2025.", translated)
             self.assertIn("## 附录", translated)
@@ -169,6 +160,12 @@ Hello again.
             self.assertTrue(
                 all(
                     request[1].get("Authorization") == f"Bearer {secret}"
+                    for request in server.server.requests
+                )
+            )
+            self.assertTrue(
+                all(
+                    "TableCell" not in request[2]["messages"][1]["content"]
                     for request in server.server.requests
                 )
             )
@@ -213,15 +210,50 @@ Hello again.
         with self.assertRaises(translator.TranslationError):
             translator.normalize_base_url("http://example.com/v1")
 
-    def test_html_tables_are_isolated_translation_chunks(self):
-        parts = [
-            translator.DocumentPart("Paragraph one.\n\n", True),
-            translator.DocumentPart("<table><tr><td>A</td></tr></table>\n\n", True),
-            translator.DocumentPart("Paragraph two.\n", True),
-        ]
-        chunks = translator.chunk_document(parts, 1000)
-        self.assertEqual(len(chunks), 3)
-        self.assertTrue(chunks[1].text.startswith("<table>"))
+    def test_html_table_body_is_preserved_while_caption_is_translatable(self):
+        source = "Table caption\n<table><tr><td>English</td></tr></table>\n\n"
+        parts = translator.document_parts(
+            source,
+            target_language="zh-CN",
+            translate_references=False,
+        )
+        self.assertEqual("".join(part.text for part in parts), source)
+        table_parts = [part for part in parts if "<table" in part.text]
+        self.assertEqual(len(table_parts), 1)
+        self.assertFalse(table_parts[0].translatable)
+        self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
+
+    def test_html_caption_inside_table_is_translatable(self):
+        source = (
+            "<table><caption>Table caption</caption>"
+            "<tr><td>English</td></tr></table>\n\n"
+        )
+        parts = translator.document_parts(
+            source,
+            target_language="zh-CN",
+            translate_references=False,
+        )
+        self.assertEqual("".join(part.text for part in parts), source)
+        self.assertTrue(any(part.text == "Table caption" and part.translatable for part in parts))
+        self.assertTrue(any("<td>English</td>" in part.text and not part.translatable for part in parts))
+
+    def test_markdown_table_body_is_preserved_while_caption_is_translatable(self):
+        source = (
+            "Table caption\n"
+            "| Method | Score |\n"
+            "| --- | ---: |\n"
+            "| Ours | 99.0 |\n\n"
+        )
+        parts = translator.document_parts(
+            source,
+            target_language="zh-CN",
+            translate_references=False,
+        )
+        self.assertEqual("".join(part.text for part in parts), source)
+        table_parts = [part for part in parts if "| Method | Score |" in part.text]
+        self.assertEqual(len(table_parts), 1)
+        self.assertFalse(table_parts[0].translatable)
+        self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
 
     def test_chunk_boundary_whitespace_is_restored(self):
         source = "Paragraph.\n\n"
@@ -229,28 +261,6 @@ Hello again.
             translator.preserve_outer_whitespace(source, "Translated paragraph."),
             "Translated paragraph.\n\n",
         )
-
-    def test_table_translator_keeps_short_abbreviations(self):
-        secret = "sk-test-secret-that-must-not-leak"
-        source = "<table><tr><td>SRE</td><td>Pres.</td><td>Hello</td></tr></table>\n\n"
-        with MockServer() as server:
-            translated, _usage, _calls = translator.translate_html_table(
-                source,
-                base_url=server.base_url,
-                api_key=secret,
-                model="deepseek-v4-flash",
-                source_language="en",
-                target_language="zh-CN",
-                glossary="",
-                timeout=10,
-                retries=1,
-                max_output_tokens=1024,
-                thinking="disabled",
-            )
-        self.assertIn("<td>SRE</td>", translated)
-        self.assertIn("<td>Pres.</td>", translated)
-        self.assertIn("<td>你好</td>", translated)
-
 
 if __name__ == "__main__":
     unittest.main()

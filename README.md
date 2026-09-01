@@ -2,7 +2,7 @@
 
 一个可复用的 Codex Skill：通过 [MinerU 官方云 API](https://mineru.net/apiManage/docs) 将本地 PDF 转换为结构化 Markdown，并可通过 OpenAI-compatible 文本模型把 Markdown 翻译成中文或其他语言。
 
-它适合论文、扫描件、双栏文档、公式、表格和复杂版式。翻译阶段直接处理 `full.md`，保留公式、链接、HTML 表格和图片引用，输出独立的翻译 Markdown 文件夹，不重新渲染 PDF。
+它适合论文、扫描件、双栏文档、公式、表格和复杂版式。翻译阶段直接处理 `full.md`：正文、标题、图注和表题会翻译，HTML 与 Markdown 表格正文保持原样，同时保留公式、链接和图片引用。输出为独立的翻译 Markdown 文件夹，不重新渲染 PDF。
 
 > 记得关闭代理登录 MinerU 获得 API。
 
@@ -18,6 +18,7 @@
 - 支持 DeepSeek 等 OpenAI-compatible 翻译 API，默认模型为 `deepseek-v4-flash`。
 - DeepSeek 翻译默认关闭 thinking，避免把 token 消耗在不必要的推理上。
 - Markdown 按结构分块翻译，支持断点续传、失败重试、术语表和参考文献跳过。
+- 结果表格正文默认不翻译，方法名、指标名和数值均保持原样；表题及表格外的说明文字正常翻译。
 - 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签，翻译后校验结构。
 - 将 Markdown 实际引用的本地图片复制到翻译目录，生成可独立移动的中文版 Markdown 文件夹。
 - 带离线 mock 单元测试和 GitHub Actions。
@@ -52,7 +53,7 @@ $mineru-pdf-to-md 把 /path/to/paper.pdf 转成 Markdown
 翻译已有 Markdown：
 
 ```text
-$mineru-pdf-to-md 把 /path/to/full.md 翻译成中文，保留公式、表格和图片
+$mineru-pdf-to-md 把 /path/to/full.md 翻译成中文，保留公式、结果表格正文和图片
 ```
 
 ### 方法二：让 Codex 安装
@@ -213,6 +214,8 @@ paper-mineru/
 ```
 
 `.translation-state.json` 保存分块缓存和 token 用量，不包含 API Key。命令中断后再次执行会复用已完成的翻译块。只有明确需要重新翻译时才使用 `--force`。
+
+翻译时，HTML `<table>` 与 Markdown 管道表格的正文会逐字保留，不发送给翻译模型；表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
 
 常用选项：
 
