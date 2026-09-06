@@ -183,6 +183,8 @@ class MinerUClientTests(unittest.TestCase):
                     str(self.pdf),
                     "--mode",
                     "agent",
+                    "--table-mode",
+                    "html",
                     "--base-url",
                     mock_server.base_url,
                     "--poll-interval",
@@ -293,7 +295,7 @@ class MinerUClientTests(unittest.TestCase):
     def test_noninteractive_upload_requires_yes(self):
         output = self.root / "blocked-output"
         code, _stdout, stderr = self.run_main(
-            [str(self.pdf), "--mode", "agent", "-o", str(output)]
+            [str(self.pdf), "--mode", "agent", "--table-mode", "html", "-o", str(output)]
         )
         self.assertEqual(code, 2)
         self.assertIn("--yes", stderr)

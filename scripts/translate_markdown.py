@@ -312,9 +312,9 @@ def replace_html_tables_with_images(
     if table_mode == "html":
         return TableImageConversion(markdown, "html", 0, None)
 
-    tables = list(HTML_TABLE_PATTERN.finditer(markdown))
+    tables = _table_spans(markdown)
     if not tables:
-        return TableImageConversion(markdown, "html", 0, None)
+        return TableImageConversion(markdown, table_mode, 0, None)
 
     errors: List[str] = []
     for candidate_path in _content_list_candidates(source, content_list_path):
@@ -329,8 +329,8 @@ def replace_html_tables_with_images(
 
         replacements: List[str] = []
         matched = True
-        for table in tables:
-            images = available.get(table.group(0))
+        for start, end in tables:
+            images = available.get(markdown[start:end])
             if not images:
                 matched = False
                 break
@@ -339,10 +339,16 @@ def replace_html_tables_with_images(
             errors.append(f"表格正文或截图不完整：{candidate_path}")
             continue
 
-        replacement_iter = iter(replacements)
-        converted = HTML_TABLE_PATTERN.sub(
-            lambda _match: f"![]({next(replacement_iter)})", markdown
-        )
+        pieces = []
+        position = 0
+        for (start, end), image_path in zip(tables, replacements):
+            pieces.append(markdown[position:start])
+            captions = HTML_CAPTION_PATTERN.findall(markdown[start:end])
+            pieces.extend(caption[1] + "\n\n" for caption in captions)
+            pieces.append(f"![]({image_path})\n")
+            position = end
+        pieces.append(markdown[position:])
+        converted = "".join(pieces)
         return TableImageConversion(
             converted,
             "image",
@@ -352,7 +358,7 @@ def replace_html_tables_with_images(
 
     detail = "；".join(errors) if errors else "未找到 *_content_list.json"
     if table_mode == "image":
-        raise TranslationError(f"无法把 HTML 表格替换为 MinerU 截图：{detail}")
+        raise TranslationError(f"无法把表格替换为 MinerU 截图：{detail}；请提供匹配的表格裁剪图及内容列表，不会自动回退 HTML。")
     eprint(f"警告：无法使用 MinerU 表格截图，回退为原始 HTML：{detail}")
     return TableImageConversion(markdown, "html", 0, None)
 
@@ -1043,7 +1049,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--table-mode",
         choices=["auto", "image", "html"],
-        default="auto",
+        default="image",
         help="表格输出：auto 优先使用 MinerU 原始截图，image 强制截图，html 保留可搜索 HTML",
     )
     parser.add_argument(

@@ -2,7 +2,7 @@
 
 一个可复用的 Codex Skill：通过 [MinerU 官方云 API](https://mineru.net/apiManage/docs) 将本地 PDF 转换为结构化 Markdown，并可通过 OpenAI-compatible 文本模型把 Markdown 翻译成中文或其他语言。
 
-它适合论文、扫描件、双栏文档、公式、表格和复杂版式。翻译阶段直接处理 `full.md`：正文、标题、图注和表题会翻译，HTML 与 Markdown 表格正文保持原样，同时保留公式、链接和图片引用。输出放在单独的翻译子目录中，不重新渲染 PDF。
+它适合论文、扫描件、双栏文档、公式、表格和复杂版式。PDF 转 Markdown 与中文翻译都默认将表格正文替换为原 PDF 的裁剪图片，不使用 HTML 渲染表格。正文、标题、图注和表题会翻译，表格图片内容保持原样。翻译输出放在单独的子目录中，不重新渲染 PDF。
 
 > 记得关闭代理登录 MinerU 获得 API。
 
@@ -20,7 +20,7 @@
 - Markdown 按结构分块翻译，支持断点续传、术语表和参考文献跳过；结构重试仍失败时只自动拆分故障块，并缓存子块与合并结果。
 - 内置简洁的 `do-not-translate.md`，其中列出的词会追加到翻译提示词末尾并保持原文。
 - 结果表格正文默认不翻译，方法名、指标名和数值均保持原样；表题及表格外的说明文字正常翻译。
-- 精准模式默认把中文版表格替换为 MinerU 原始表格截图，避免 HTML 单元格内公式无法渲染；缺少截图时自动保留原始 HTML。
+- PDF 转换与中文翻译默认使用 MinerU 原始表格裁剪图；缺少匹配图片时报错并保留已有结果，不自动回退 HTML。可从原 PDF 补齐裁剪图后继续。
 - 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签；公式、内联代码和保留术语可随目标语言语序调整，图片、链接、URL、HTML 与代码块不得换位。
 - 默认重写本地图片路径，让英文版和中文版共用同一份图片；需要独立移动中文版目录时可显式复制图片。
 - 带离线 mock 单元测试和 GitHub Actions。
@@ -144,7 +144,7 @@ DeepSeek 默认关闭 thinking。接入其他 OpenAI-compatible 服务时，如�
 自动选择模式：
 
 ```bash
-python3 scripts/mineru_pdf_to_md.py input.pdf -o output --mode auto --yes
+python3 scripts/mineru_pdf_to_md.py input.pdf -o output --mode precise --table-mode image --yes
 ```
 
 强制使用精准 VLM 和 OCR：
@@ -220,9 +220,9 @@ paper-mineru/
 
 中文版中的图片路径会自动改写为相对于翻译文件的路径（例如 `../images/figure.png`），因此英文版和中文版共用 `paper-mineru/images/`，不会生成重复图片。原有的 `--no-copy-assets` 参数仍可使用，并等同于这一默认行为。若需要把中文版目录单独移动或发送，使用 `--copy-assets`，脚本会保留原图片路径并把 Markdown 实际引用的图片复制到翻译目录。
 
-翻译时，脚本会在输入 Markdown 同目录自动寻找 `*_content_list.json`。若其中的 `table_body` 与 HTML 表格匹配且 `img_path` 存在，中文版默认用 MinerU 已提取的原始表格截图替换 HTML 表格；图片与英文版共用，不会复制，也不会发送给翻译模型。表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
+PDF 转换完成前，脚本会使用 `*_content_list.json` 中匹配的 `table_body` 和 `img_path` 将 `full.md` 表格替换为原始裁剪图片。中文翻译保留已有表格图片；输入若仍含文本表格，则按同样规则替换。图片与英文版共用，不会发送给翻译模型。表题、正文、章节标题、图注以及表格外的解释性文字仍会翻译。
 
-默认 `--table-mode auto` 在缺少 content list 或表格截图时自动回退为原始 HTML。若更重视表格文字的搜索、选择与复制，可使用 `--table-mode html`；若必须使用截图且不允许回退，可使用 `--table-mode image --content-list /path/to/*_content_list.json`。
+两阶段默认 `--table-mode image`。发现表格但缺少匹配的内容列表或截图时，报错而不回退；没有表格的文档不要求提供表格图片。已有表格图片的 Markdown 可直接翻译。PDF 默认图片流程要求精准模式、Token 和表格识别。只有明确需要文本表格时才使用 `--table-mode html`；翻译器也保留显式 `auto` 兼容模式。可用 `--content-list PATH` 为翻译器指定匹配的内容列表。
 
 ### 不翻译词汇表
 

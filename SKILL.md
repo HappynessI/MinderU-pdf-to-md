@@ -7,6 +7,10 @@ description: Convert local PDFs to structured Markdown with MinerU and translate
 
 Use the bundled scripts instead of recreating API code. Resolve `scripts/` relative to this skill directory, not the user's current directory.
 
+## Default table policy
+
+For both PDF → Markdown and Markdown → Chinese, replace table bodies with original PDF table crops, not HTML-rendered screenshots or regenerated tables. Keep captions as text (translate them in Chinese output) and leave the table image contents unchanged. Validate each image path and correspondence to its table. If a crop is missing, obtain it from the original PDF when available; otherwise request the source or report incomplete conversion. Never silently fall back to HTML/Markdown tables. Already-converted files must also meet this policy before reuse. No table images are required for a document without tables.
+
 ## When to use
 
 1. A PDF is provided as reference material: convert it to Markdown before reading, analyzing, or citing its contents.
@@ -29,9 +33,9 @@ Use the bundled scripts instead of recreating API code. Resolve `scripts/` relat
 
 Choose the MinerU mode:
 
-- Use `--mode agent` for the token-free Agent API when the PDF is at most 10 MB and 20 pages and lightweight pipeline output is sufficient.
+- Use `--mode precise` by default so the result includes original table crops. Agent mode is only permitted when the user explicitly opts out of image tables.
 - Use `--mode precise` for complex layouts, formulas, tables, OCR, files up to 200 MB or 200 pages, or when the user requests VLM quality.
-- Use `--mode auto` by default: the script selects precise mode when it can resolve a Token, otherwise Agent mode.
+- Use `--mode precise --table-mode image` by default: the script selects precise mode when it can resolve a Token, otherwise Agent mode.
 - Add `--ocr` for scanned PDFs or PDFs with a broken text layer. Keep table and formula recognition enabled unless the user asks otherwise.
 
 Run:
@@ -39,7 +43,7 @@ Run:
 ```bash
 python3 scripts/mineru_pdf_to_md.py INPUT.pdf \
   -o OUTPUT_DIR \
-  --mode auto \
+  --mode precise --table-mode image \
   --token-file ~/.codex/api/MinderU-API.md \
   --yes
 ```
@@ -73,7 +77,7 @@ Translate MinerU's `full.md`, or another Markdown document. The flat content lis
 python3 scripts/translate_markdown.py INPUT.md \
   -o TRANSLATION_DIR \
   --target-language zh-CN \
-  --model deepseek-v4-flash \
+  --model deepseek-v4-flash --table-mode image \
   --api-key-file ~/.codex/api/DeepSeek-API.md \
   --yes
 ```
@@ -93,8 +97,8 @@ paper-mineru/
 The translator:
 
 - chunks at Markdown block boundaries, resumes from `.translation-state.json`, and recursively splits only a persistently failing chunk while caching both child and combined results;
-- uses each MinerU table crop as the default translated-document representation when a matching `*_content_list.json` and image are available;
-- falls back to preserving HTML and Markdown table bodies exactly as written when table screenshots are unavailable;
+- replaces every table body with the matching original MinerU table crop;
+- fails when any table lacks a matching crop; do not silently keep HTML or Markdown table bodies;
 - translates headings, body prose, figure captions, table captions, and explanatory text outside tables;
 - protects formulas, code, image references, link destinations, URLs, and HTML tags;
 - allows formulas, inline code, and protected terms to follow target-language word order while requiring the exact same protected-value multiset; image, link, URL, HTML, and fenced-code order remains fixed;
@@ -103,7 +107,7 @@ The translator:
 - copies referenced images only when `--copy-assets` is explicitly requested for a self-contained translation directory.
 - appends `do-not-translate.md` to the translation prompt and protects every listed term so it remains exactly unchanged.
 
-The default `--table-mode auto` keeps the table visually identical to the paper and avoids raw-HTML math-rendering problems. Use `--table-mode html` only when searchable/selectable table text matters more than exact appearance. Use `--table-mode image --content-list PATH` to require a specific content list and fail rather than fall back.
+Default to `--table-mode image` in both conversion and translation. The converter replaces table bodies in `full.md` before reporting success; translation retains these images or replaces remaining tables using matching crops. Pass `--content-list PATH` to the translator when the content list is not beside the input. `html` or fallback-capable `auto` modes are allowed only when the user explicitly requests text tables.
 
 Maintain permanent untranslated terms as Markdown bullets in `do-not-translate.md`, one term per item. Use `--do-not-translate-file` to select another list. Use `--glossary-file` for document-specific source-to-target terminology. Use `--translate-references` only when the user explicitly wants bibliography entries translated. Use `--force` only when cached translations must be discarded or the model or language settings have changed.
 
@@ -112,7 +116,7 @@ Verify the translation:
 1. Read the final JSON and confirm that `markdown_path` exists under the translation directory.
 2. Confirm that API calls, cache hits, shared or copied asset count, and token usage are plausible.
 3. Verify that every relative image reference resolves from the translated Markdown.
-4. Confirm that table images match the original tables and captions remain translated; in HTML fallback mode, confirm table bodies are unchanged.
+4. Confirm that table images match the original tables and captions remain translated; confirm no HTML or Markdown table bodies remain in default image mode.
 5. Compare representative headings, formulas, figure captions, table captions, and paragraphs with the source.
 
 ### 4. Report the result

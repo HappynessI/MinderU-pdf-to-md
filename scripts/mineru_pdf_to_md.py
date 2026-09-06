@@ -564,6 +564,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ocr", action="store_true", help="强制启用 OCR")
     parser.add_argument("--page-range", help="页码范围，例如 1-10")
     parser.add_argument("--no-table", action="store_true", help="关闭表格识别")
+    parser.add_argument(
+        "--table-mode", choices=["image", "html"], default="image",
+        help="默认 image：使用原 PDF 表格截图；html 仅用于明确要求保留文本表格",
+    )
     parser.add_argument("--no-formula", action="store_true", help="关闭公式识别")
     parser.add_argument("--data-id", help="精准 API 的业务数据标识")
     parser.add_argument("--token-file", type=Path, help="精准 API Token 文件")
@@ -599,6 +603,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         mode = args.mode
         if mode == "auto":
             mode = "precise" if token else "agent"
+        if args.table_mode == "image" and (mode != "precise" or args.no_table):
+            raise MinerUError("默认图片表格需要 precise 模式、Token 和表格识别；不能使用 agent 或 --no-table。")
         if mode == "precise" and not token:
             raise MinerUError(
                 "精准模式需要 Token。请运行 scripts/configure_token.py，"
@@ -619,6 +625,19 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             result = convert_precise(args, source, destination, str(token))
         else:
             result = convert_agent(args, source, destination)
+        if args.table_mode == "image":
+            from translate_markdown import TranslationError, replace_html_tables_with_images
+            markdown_path = Path(result["markdown_path"])
+            try:
+                conversion = replace_html_tables_with_images(
+                    markdown_path.read_text(encoding="utf-8"), markdown_path,
+                    table_mode="image", content_list_path=None,
+                )
+            except TranslationError as exc:
+                raise MinerUError(f"表格图片处理失败，原始结果已保留但转换未完成：{exc}") from exc
+            markdown_path.write_text(conversion.markdown, encoding="utf-8")
+            result["table_images"] = conversion.image_count
+        result["table_mode"] = args.table_mode
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except MinerUError as exc:
