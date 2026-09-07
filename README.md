@@ -6,6 +6,16 @@
 
 > 记得关闭代理登录 MinerU 获得 API。
 
+## 为什么做这个 Skill
+
+> 我受够了盯着“沉浸式翻译”插件翻译论文时肉眼几乎难以辨认的小字，也受够了 Codex 阅读 PDF 论文时花大量时间和功夫把 PDF 拆成一张张图片再看图。
+>
+> 所以有了这个 Skill——我只需要配置一个免费的 MinerU API，以及某个免费中转站提供的 DeepSeek API，就能在上个厕所的功夫里把论文 PDF 转换成 Markdown。这太美妙了。
+
+![翻译后的中文 Markdown 与原始 PDF 并排对照](assets/pdf-to-markdown-comparison.png)
+
+_左侧是转换并翻译后的中文 Markdown，右侧是原始 PDF。_
+
 ## 功能
 
 - 支持免 Token 的 MinerU Agent 轻量 API。
