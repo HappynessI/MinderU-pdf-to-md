@@ -275,6 +275,16 @@ Hello again.
         self.assertEqual(conversion.image_count, 0)
         self.assertIn(self.table_body, conversion.markdown)
 
+    def test_bold_lead_phrase_keeps_marker_and_following_space(self):
+        source = "**Classifier Training Recipes** Currently, the selection relies on scoring."
+        protected = translator.protect_markdown(source)
+        self.assertEqual(
+            [value for _placeholder, value in protected.replacements], ["**", "**"]
+        )
+        broken = "**分类器训练方案**Currently，选择依赖评分。"
+        normalized = translator.normalize_emphasis_boundaries(source, broken)
+        self.assertEqual(normalized, "**分类器训练方案** Currently，选择依赖评分。")
+
     def test_auto_table_mode_falls_back_without_content_list(self):
         isolated = self.root / "isolated"
         isolated.mkdir()

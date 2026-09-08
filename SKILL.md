@@ -21,6 +21,8 @@ MinerU may emit one visual figure as several adjacent `chart` blocks when the PD
 
 A `Contents`/`目录` section is a structural object, not ordinary prose. Join wrapped lines across page boundaries, parse the numeric section prefix (`1`, `2.1`, `2.1.1`, etc.), preserve the printed page number, and emit a nested Markdown list with indentation matching the numeric depth. Verify that every entry from the PDF appears exactly once and that no entry is stranded as a continuation paragraph. Keep the raw extraction only in an HTML comment if auditability is needed.
 
+During Markdown translation, protect strong-emphasis delimiters (`**` and `__`) as ordered placeholders while translating the phrase inside them. After restoring placeholders, compare the whitespace immediately before and after every delimiter with the source and restore missing spaces. In particular, `**Lead phrase** Following text` must remain a distinct bold phrase followed by a separate sentence, even when the target language normally omits spaces.
+
 For each converted report, perform a targeted visual QA pass: compare representative pages containing the title/first figure, the complete contents section, at least one later multi-panel figure, and any algorithm block. A conversion is incomplete if a group-level figure is fragmented, a contents entry is missing/duplicated, or the Markdown still contains the original flat contents dump.
 
 ## When to use

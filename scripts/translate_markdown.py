@@ -544,6 +544,7 @@ def chunk_document(parts: Sequence[DocumentPart], max_chars: int) -> List[Docume
 PROTECTED_PATTERN = re.compile(
     r"(?:```[^\n]*\n.*?```|~~~[^\n]*\n.*?~~~)"
     r"|(?:<!--.*?-->)"
+    r"|(?<!\\)(?:\*\*|__)"
     r"|(?:!\[[^\]\n]*\]\([^\n)]*\))"
     r"|(?:\$\$.*?\$\$)"
     r"|(?:\\\[.*?\\\])"
@@ -711,6 +712,33 @@ def normalize_preserved_url_boundaries(source: str, translated: str) -> str:
     return normalized
 
 
+STRONG_MARKER_RE = re.compile(r"(?<!\\)(?:\*\*|__)")
+
+
+def normalize_emphasis_boundaries(source: str, translated: str) -> str:
+    """Restore source whitespace immediately around preserved strong markers."""
+    source_markers = list(STRONG_MARKER_RE.finditer(source))
+    target_markers = list(STRONG_MARKER_RE.finditer(translated))
+    if len(source_markers) != len(target_markers):
+        return translated
+
+    normalized = translated
+    for source_match, target_match in reversed(list(zip(source_markers, target_markers))):
+        position = target_match.start()
+        end = target_match.end()
+        source_before = source[source_match.start() - 1] if source_match.start() else ""
+        source_after = source[source_match.end()] if source_match.end() < len(source) else ""
+        target_before = normalized[position - 1] if position else ""
+        target_after = normalized[end] if end < len(normalized) else ""
+
+        if source_before.isspace() and target_before and not target_before.isspace():
+            normalized = normalized[:position] + source_before + normalized[position:]
+            end += len(source_before)
+        if source_after.isspace() and target_after and not target_after.isspace():
+            normalized = normalized[:end] + source_after + normalized[end:]
+    return normalized
+
+
 def split_failed_translation_chunk(
     markdown: str,
     *,
@@ -838,6 +866,7 @@ Mandatory rules:
 4. Translate all natural-language prose faithfully without omission, condensation, expansion, or factual correction.
 5. Keep author names, model names, dataset names, citations, variable names, abbreviations, URLs, and numeric values unchanged unless a conventional translated name is unambiguous.
 6. Use concise, publication-quality academic language and consistent terminology.
+7. Preserve Markdown emphasis boundaries. Keep every strong marker (`**` or `__`) exactly once and keep source whitespace immediately before and after each marker; never merge a bold lead phrase into the following sentence.
 """
     if glossary:
         prompt += "\nRequired terminology:\n" + glossary + "\n"
@@ -1203,7 +1232,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 glossary_hash=glossary_hash,
                 do_not_translate_hash=do_not_translate_hash,
                 thinking=args.thinking,
-                processor_version="table-images-v1-do-not-translate",
+                processor_version="table-images-v1-do-not-translate-strong-markers-v1",
             )
 
         def translate_chunk(text: str, label: str) -> str:
@@ -1217,6 +1246,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     do_not_translate_terms,
                 )
                 value = normalize_preserved_url_boundaries(text, value)
+                value = normalize_emphasis_boundaries(text, value)
                 validate_final_document(text, value)
                 return value
 
@@ -1297,6 +1327,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             do_not_translate_terms,
         )
         translated_markdown = normalize_preserved_url_boundaries(
+            translation_source,
+            translated_markdown,
+        )
+        translated_markdown = normalize_emphasis_boundaries(
             translation_source,
             translated_markdown,
         )
