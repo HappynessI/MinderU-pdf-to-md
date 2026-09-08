@@ -21,6 +21,8 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from markdown_postprocess import normalize_algorithm_blocks
+
 
 DEFAULT_BASE_URL = "https://mineru.net"
 KEYCHAIN_SERVICE = "mineru-pdf-to-md"
@@ -625,18 +627,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             result = convert_precise(args, source, destination, str(token))
         else:
             result = convert_agent(args, source, destination)
+        markdown_path = Path(result["markdown_path"])
+        markdown = markdown_path.read_text(encoding="utf-8")
         if args.table_mode == "image":
             from translate_markdown import TranslationError, replace_html_tables_with_images
-            markdown_path = Path(result["markdown_path"])
             try:
                 conversion = replace_html_tables_with_images(
-                    markdown_path.read_text(encoding="utf-8"), markdown_path,
+                    markdown, markdown_path,
                     table_mode="image", content_list_path=None,
                 )
             except TranslationError as exc:
                 raise MinerUError(f"表格图片处理失败，原始结果已保留但转换未完成：{exc}") from exc
-            markdown_path.write_text(conversion.markdown, encoding="utf-8")
+            markdown = conversion.markdown
             result["table_images"] = conversion.image_count
+        markdown, algorithm_blocks = normalize_algorithm_blocks(markdown)
+        markdown_path.write_text(markdown, encoding="utf-8")
+        result["algorithm_blocks"] = algorithm_blocks
         result["table_mode"] = args.table_mode
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

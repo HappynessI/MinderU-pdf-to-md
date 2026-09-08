@@ -31,6 +31,7 @@ _左侧是转换并翻译后的中文 Markdown，右侧是原始 PDF。_
 - 内置简洁的 `do-not-translate.md`，其中列出的词会追加到翻译提示词末尾并保持原文。
 - 结果表格正文默认不翻译，方法名、指标名和数值均保持原样；表题及表格外的说明文字正常翻译。
 - PDF 转换与中文翻译默认使用 MinerU 原始表格裁剪图；缺少匹配图片时报错并保留已有结果，不自动回退 HTML。可从原 PDF 补齐裁剪图后继续。
+- 自动把 MinerU 的 `mineru-algorithm` HTML 块规范化为 Markdown 伪代码块，解码 `&lt;`、`&gt;` 等实体，并把零碎的行内 LaTeX 转成可读符号。
 - 翻译前保护公式、代码、图片路径、链接地址、URL 和 HTML 标签；公式、内联代码和保留术语可随目标语言语序调整，图片、链接、URL、HTML 与代码块不得换位。
 - 默认重写本地图片路径，让英文版和中文版共用同一份图片；需要独立移动中文版目录时可显式复制图片。
 - 带离线 mock 单元测试和 GitHub Actions。
@@ -197,9 +198,29 @@ python3 scripts/mineru_pdf_to_md.py input.pdf -o output \
   "batch_id": "...",
   "model": "vlm",
   "output_dir": "/path/to/output",
-  "markdown_path": "/path/to/output/full.md"
+  "markdown_path": "/path/to/output/full.md",
+  "algorithm_blocks": 1
 }
 ```
+
+## 算法伪代码规范化
+
+MinerU 会把检测到的算法标记为 `code` 类型、`sub_type: "algorithm"`，但生成的 `full.md` 可能仍是 `<div class="mineru-algorithm">`：比较符会变成 HTML 实体，变量和操作符则混有零碎的 `$...$` LaTeX，因此 Markdown 阅读器常把整段显示成普通正文。
+
+这个 Skill 会在 PDF 转换结束时自动把这类明确标记的算法块改写成可移植的 Markdown：
+
+````markdown
+**Algorithm 1: Example**
+
+```text
+1: x ← Initialize()
+2: while x < limit do
+3:     x ← Update(x)
+4: end while
+```
+````
+
+处理包括：保留算法标题、使用围栏代码块呈现伪代码、解码 HTML 实体，并把 `\leftarrow`、`\leq`、`\mathbf{Q}_{t}` 等常见行内 LaTeX 简化为 `←`、`≤`、`Q_t`。普通 `div`、正文公式和程序代码不会被这条规则改写。翻译已有的旧版 `full.md` 时也会先执行同样的修复；算法标题仍可翻译，围栏内的变量和控制流按代码保护。
 
 ## Markdown 翻译
 

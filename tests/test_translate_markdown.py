@@ -103,6 +103,11 @@ This is text with token, $E = mc^2$, `code`, and [site](https://example.com/a).
 ![](images/figure.png)
 Figure caption
 
+<div class="mineru-algorithm">
+Algorithm 1 Mock Update
+1: $x \\leftarrow y$ when x &lt; limit
+</div>
+
 Table caption
 {self.table_body}
 
@@ -173,6 +178,10 @@ Hello again.
             self.assertIn("![](../images/table.png)", translated)
             self.assertIn("表题", translated)
             self.assertNotIn("<table", translated)
+            self.assertIn("**Algorithm 1 Mock Update**", translated)
+            self.assertIn("```text\n1: x ← y when x < limit\n```", translated)
+            self.assertNotIn("mineru-algorithm", translated)
+            self.assertEqual(result["algorithm_blocks"], 1)
             self.assertIn("## 参考文献", translated)
             self.assertIn("Smith, A. Hello paper. 2025.", translated)
             self.assertIn("## 附录", translated)
@@ -205,6 +214,7 @@ Hello again.
             self.assertTrue(
                 all(
                     "TableCell" not in request[2]["messages"][1]["content"]
+                    and "x ← y" not in request[2]["messages"][1]["content"]
                     for request in server.server.requests
                 )
             )

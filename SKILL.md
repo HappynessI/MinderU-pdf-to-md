@@ -11,6 +11,10 @@ Use the bundled scripts instead of recreating API code. Resolve `scripts/` relat
 
 For both PDF → Markdown and Markdown → Chinese, replace table bodies with original PDF table crops, not HTML-rendered screenshots or regenerated tables. Keep captions as text (translate them in Chinese output) and leave the table image contents unchanged. Validate each image path and correspondence to its table. If a crop is missing, obtain it from the original PDF when available; otherwise request the source or report incomplete conversion. Never silently fall back to HTML/Markdown tables. Already-converted files must also meet this policy before reuse. No table images are required for a document without tables.
 
+## Algorithm policy
+
+Render MinerU blocks explicitly marked with the `mineru-algorithm` class as fenced `text` pseudocode, not as HTML `div` prose. Decode HTML entities and simplify inline LaTeX commands into readable pseudocode symbols while preserving titles, line order, indentation, variables, and control flow. Apply the same normalization when translating an older Markdown file. Do not rewrite ordinary HTML blocks, prose equations, or normal code blocks.
+
 ## When to use
 
 1. A PDF is provided as reference material: convert it to Markdown before reading, analyzing, or citing its contents.
@@ -60,12 +64,14 @@ OUTPUT_DIR/
 - Precise mode retains every extracted image, including images not referenced by `full.md`.
 - Add `--keep-debug-artifacts` only when the user requests complete MinerU output or when diagnosing layout, reading-order, table, formula, or model errors.
 - Agent mode returns only `full.md` because its API does not provide a result bundle.
+- PDF conversion automatically normalizes MinerU algorithm `div` blocks into fenced pseudocode; no additional model call is required.
 
 Verify the conversion:
 
 1. Read the final JSON and confirm that `markdown_path` exists.
 2. Confirm that the Markdown is non-empty and local image links resolve in precise mode.
 3. For complex PDFs, compare representative original pages with the Markdown for reading order, headings, formulas, tables, figures, and captions.
+4. If the document contains algorithms, confirm that `algorithm_blocks` is plausible and no `mineru-algorithm` `div`, encoded comparison operator, or fragmentary inline LaTeX remains inside the normalized pseudocode.
 
 Read [references/mineru-api.md](references/mineru-api.md) only when changing the client, diagnosing protocol failures, or explaining API limits.
 

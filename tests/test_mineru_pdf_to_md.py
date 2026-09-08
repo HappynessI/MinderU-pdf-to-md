@@ -21,12 +21,19 @@ import mineru_pdf_to_md as client  # noqa: E402
 
 
 PDF_BYTES = b"%PDF-1.4\n% MinerU integration fixture\n%%EOF\n"
+ALGORITHM_MARKDOWN = """# Result
+
+<div class="mineru-algorithm" style="white-space: pre-wrap;">
+Algorithm 1 Mock Procedure
+1: $x \\leftarrow y$ while x &lt; limit
+</div>
+"""
 
 
 def make_result_zip() -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("result/full.md", "# Precise result\n\nConverted by mock MinerU.\n")
+        archive.writestr("result/full.md", "# Precise result\n\n" + ALGORITHM_MARKDOWN)
         archive.writestr("result/images/figure.txt", "image-placeholder")
         archive.writestr("result/images/unreferenced.txt", "must-be-preserved")
         archive.writestr("result/sample_content_list.json", "[]")
@@ -130,7 +137,7 @@ class MinerUMockHandler(BaseHTTPRequestHandler):
             )
             return
         if self.path == "/download/full.md":
-            self._bytes(b"# Agent result\n\nConverted by mock MinerU.\n", "text/markdown")
+            self._bytes(("# Agent result\n\n" + ALGORITHM_MARKDOWN).encode(), "text/markdown")
             return
         if self.path == "/download/result.zip":
             self._bytes(make_result_zip(), "application/zip")
@@ -197,7 +204,12 @@ class MinerUClientTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             result = json.loads(stdout)
             self.assertEqual(result["mode"], "agent")
-            self.assertIn("Agent result", Path(result["markdown_path"]).read_text())
+            converted = Path(result["markdown_path"]).read_text()
+            self.assertIn("Agent result", converted)
+            self.assertIn("```text", converted)
+            self.assertIn("1: x ← y while x < limit", converted)
+            self.assertNotIn("mineru-algorithm", converted)
+            self.assertEqual(result["algorithm_blocks"], 1)
             uploads = [request for request in mock_server.server.requests if request[0] == "PUT"]
             self.assertEqual(uploads[0][3], PDF_BYTES)
 
@@ -224,7 +236,11 @@ class MinerUClientTests(unittest.TestCase):
             self.assertNotIn(secret, stdout + stderr)
             result = json.loads(stdout)
             self.assertEqual(result["mode"], "precise")
-            self.assertIn("Precise result", Path(result["markdown_path"]).read_text())
+            converted = Path(result["markdown_path"]).read_text()
+            self.assertIn("Precise result", converted)
+            self.assertIn("```text", converted)
+            self.assertNotIn("mineru-algorithm", converted)
+            self.assertEqual(result["algorithm_blocks"], 1)
             relative_files = {
                 path.relative_to(output).as_posix()
                 for path in output.rglob("*")

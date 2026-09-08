@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from markdown_postprocess import normalize_algorithm_blocks
+
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
@@ -1113,6 +1115,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         markdown = source.read_text(encoding="utf-8")
         if not markdown.strip():
             raise TranslationError("输入 Markdown 为空")
+        markdown, algorithm_blocks = normalize_algorithm_blocks(markdown)
 
         args.base_url = normalize_base_url(args.base_url)
         model = normalize_model(args.model)
@@ -1167,6 +1170,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "model": model,
                 "base_url": args.base_url,
                 "table_mode": table_conversion.mode,
+                "algorithm_blocks": algorithm_blocks,
                 "content_list_path": (
                     str(table_conversion.content_list_path)
                     if table_conversion.content_list_path
@@ -1323,6 +1327,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "target_language": args.target_language,
             "table_mode": table_conversion.mode,
             "table_images": table_conversion.image_count,
+            "algorithm_blocks": algorithm_blocks,
             "content_list_path": (
                 str(table_conversion.content_list_path)
                 if table_conversion.content_list_path
