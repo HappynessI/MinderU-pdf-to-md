@@ -15,6 +15,14 @@ For both PDF → Markdown and Markdown → Chinese, replace table bodies with or
 
 Render MinerU blocks explicitly marked with the `mineru-algorithm` class as fenced `text` pseudocode, not as HTML `div` prose. Decode HTML entities and simplify inline LaTeX commands into readable pseudocode symbols while preserving titles, line order, indentation, variables, and control flow. Apply the same normalization when translating an older Markdown file. Do not rewrite ordinary HTML blocks, prose equations, or normal code blocks.
 
+### Figure and contents policy
+
+MinerU may emit one visual figure as several adjacent `chart` blocks when the PDF contains a multi-panel figure. Before accepting the Markdown, inspect the first page and every page containing a `Figure N` caption against the original PDF. If adjacent image blocks share one page, form a contiguous horizontal or vertical group, and one group-level `Figure N` caption, treat them as one figure: reconstruct a single crop from the original PDF page (preferred) or stitch the extracted crops in page order, replace the fragment references with one image reference, and keep the caption once. Do not use panel labels or sub-captions as evidence that panels are independent figures.
+
+A `Contents`/`目录` section is a structural object, not ordinary prose. Join wrapped lines across page boundaries, parse the numeric section prefix (`1`, `2.1`, `2.1.1`, etc.), preserve the printed page number, and emit a nested Markdown list with indentation matching the numeric depth. Verify that every entry from the PDF appears exactly once and that no entry is stranded as a continuation paragraph. Keep the raw extraction only in an HTML comment if auditability is needed.
+
+For each converted report, perform a targeted visual QA pass: compare representative pages containing the title/first figure, the complete contents section, at least one later multi-panel figure, and any algorithm block. A conversion is incomplete if a group-level figure is fragmented, a contents entry is missing/duplicated, or the Markdown still contains the original flat contents dump.
+
 ## When to use
 
 1. A PDF is provided as reference material: convert it to Markdown before reading, analyzing, or citing its contents.
