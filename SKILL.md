@@ -17,13 +17,32 @@ Render MinerU blocks explicitly marked with the `mineru-algorithm` class as fenc
 
 ### Figure and contents policy
 
-MinerU may emit one visual figure as several adjacent `chart` blocks when the PDF contains a multi-panel figure. Before accepting the Markdown, inspect the first page and every page containing a `Figure N` caption against the original PDF. If adjacent image blocks share one page, form a contiguous horizontal or vertical group, and one group-level `Figure N` caption, treat them as one figure: reconstruct a single crop from the original PDF page (preferred) or stitch the extracted crops in page order, replace the fragment references with one image reference, and keep the caption once. Do not use panel labels or sub-captions as evidence that panels are independent figures.
+MinerU may emit one visual figure as several adjacent `chart` blocks when the PDF contains a multi-panel figure. Before accepting the Markdown, inspect the first page and every page containing a `Figure N` caption against the original PDF. If adjacent image blocks share one page, form a contiguous horizontal or vertical group, and one group-level `Figure N` caption, treat them as one figure: reconstruct a single crop from the original PDF page (preferred) or stitch the extracted crops in page order, replace the fragment references with one image reference, and keep the caption once. Do not use panel labels or sub-captions as evidence that panels are independent figures. Use `scripts/merge_figure_panels.py` for this — see "Multi-panel figures: rebuild them from the PDF" below for the command, the detection rule, and the pitfalls; never re-derive the grouping by eye.
 
 A `Contents`/`目录` section is a structural object, not ordinary prose. Join wrapped lines across page boundaries, parse the numeric section prefix (`1`, `2.1`, `2.1.1`, etc.), preserve the printed page number, and emit a nested Markdown list with indentation matching the numeric depth. Verify that every entry from the PDF appears exactly once and that no entry is stranded as a continuation paragraph. Keep the raw extraction only in an HTML comment if auditability is needed.
 
 During Markdown translation, protect strong-emphasis delimiters (`**` and `__`) as ordered placeholders while translating the phrase inside them. After restoring placeholders, compare the whitespace immediately before and after every delimiter with the source and restore missing spaces. In particular, `**Lead phrase** Following text` must remain a distinct bold phrase followed by a separate sentence, even when the target language normally omits spaces.
 
 For each converted report, perform a targeted visual QA pass: compare representative pages containing the title/first figure, the complete contents section, at least one later multi-panel figure, and any algorithm block. A conversion is incomplete if a group-level figure is fragmented, a contents entry is missing/duplicated, or the Markdown still contains the original flat contents dump.
+
+## Multi-panel figures: rebuild them from the PDF (standard)
+
+MinerU emits one multi-panel figure as several adjacent `chart` blocks. Rebuild each group into a single image cropped from the original PDF — this is the required output shape, not an optional polish. Run it right after PDF → Markdown conversion and **before** translation, so the translator only ever sees one reference per figure:
+
+```bash
+uv venv .pdfenv && uv pip install --python .pdfenv/bin/python pymupdf   # once; system python3 has no pymupdf
+.pdfenv/bin/python scripts/merge_figure_panels.py PAPER.pdf \
+  --mineru-dir OUTPUT_DIR --markdown full.md \
+  --translation translation-zh-CN/full-CN.md
+```
+
+It writes `images/figure-NN.jpg`, replaces the group's refs with that one ref, keeps the group caption once, and keeps `(a)`/`(b)` panel labels as text lines after the image. Already-merged files are reported as skipped, so re-running is safe. A group whose panels sit on different PDF pages is reported and left untouched — crop it manually and say so in the report.
+
+How it decides, and why not to hand-roll the detection: panel membership comes from `<uuid>_content_list.json`, where every panel but the last has an empty `chart_caption` and the last carries `Figure N.` (occasionally plus the panel's own `(a)` label, which does **not** close the run). A preceding **table** image is a different block type and is never absorbed. Detecting groups in the Markdown instead ("consecutive image refs above a caption") silently swallows a table image that happens to sit above the figure, producing one image that is half table, half figure. Never widen or shrink a group by walking image refs alone.
+
+The crop is the union of the panel bboxes (content-list coordinates are on a 0–1000 grid per page), scaled to page points, rendered at 300 dpi with 5 pt padding. MinerU's original per-panel crops stay in `images/` unreferenced.
+
+Always verify the rebuilt figures before reporting the conversion complete: build a contact sheet and read it visually. A correct crop shows every panel with its axes, titles, and legends, and no body or caption text.
 
 ## When to use
 
@@ -85,6 +104,15 @@ Verify the conversion:
 
 Read [references/mineru-api.md](references/mineru-api.md) only when changing the client, diagnosing protocol failures, or explaining API limits.
 
+Then rebuild split multi-panel figures (see "Multi-panel figures" above) before translating:
+
+```bash
+.pdfenv/bin/python scripts/merge_figure_panels.py INPUT.pdf --mineru-dir OUTPUT_DIR \
+  --markdown full.md
+```
+
+If the translation already exists, pass `--translation translation-zh-CN/full-CN.md` to the same call so both Markdown files share the one merged image; the translator's state file is unaffected because only image references change.
+
 ### 3. Translate English Markdown into Chinese
 
 Translate MinerU's `full.md`, or another Markdown document. The flat content list may be read locally to resolve MinerU table screenshots, but it is never sent to the translation model:
@@ -138,5 +166,18 @@ Verify the translation:
 ### 4. Report the result
 
 - For PDF conversion, report the Markdown path, MinerU mode, and any known extraction limitations.
+- If split multi-panel figures were rebuilt, report which figures, that each was checked visually, and any group left unmerged.
 - For translation, report the translated Markdown path, shared or copied assets, preserved table bodies, untranslated bibliography behavior, and any failed asset references.
 - State that the translation workflow produces Markdown rather than a rendered PDF or DOCX.
+
+## Keeping the published repo in sync (standing request)
+
+This skill is published at https://github.com/HappynessI/MinderU-pdf-to-md (public, branch `main`); that repo holds exactly this directory. Whenever anything here changes — `SKILL.md`, `scripts/`, `tests/`, `references/`, `do-not-translate.md` — push the change in the same turn instead of leaving local edits unpublished:
+
+```bash
+cd "$(mktemp -d)" && git clone https://github.com/HappynessI/MinderU-pdf-to-md.git repo
+rsync -a --delete --exclude .git ~/.hermes/skills/productivity/mineru-pdf-to-md/ repo/
+cd repo && git add -A && git status --short        # review before committing
+```
+
+Run the suite first (`python3 -m unittest discover -s tests`) — CI runs the same command on Python 3.9 and 3.12, so keep new code and tests 3.9-safe. Commit in the repo's conventional style (`feat:` / `fix:` / `docs:`), one logical change per commit, then `git push`. Never commit credentials, `api/` token files, converted paper output, or `*-mineru/` directories. Verify the push landed (`gh repo view HappynessI/MinderU-pdf-to-md --json pushedAt`) rather than trusting the exit code alone.

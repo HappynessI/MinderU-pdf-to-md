@@ -25,3 +25,4 @@ jobs:
           scripts/configure_token.py
           scripts/translate_markdown.py
           scripts/configure_translation_token.py
+          scripts/merge_figure_panels.py
