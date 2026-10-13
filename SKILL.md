@@ -42,7 +42,18 @@ How it decides, and why not to hand-roll the detection: panel membership comes f
 
 The crop is the union of the panel bboxes (content-list coordinates are on a 0–1000 grid per page), scaled to page points, rendered at 300 dpi with 5 pt padding. MinerU's original per-panel crops stay in `images/` unreferenced.
 
-Always verify the rebuilt figures before reporting the conversion complete: build a contact sheet and read it visually. A correct crop shows every panel with its axes, titles, and legends, and no body or caption text.
+Always verify the rebuilt figures before reporting the conversion complete, in two passes. Geometry, wiring and reference resolution first:
+
+```bash
+.pdfenv/bin/python scripts/verify_merged_figures.py PAPER.pdf --mineru-dir OUTPUT_DIR \
+  --markdown full.md --translation translation-zh-CN/full-CN.md
+```
+
+It re-derives every group from the content list and checks that each merged image is referenced exactly once with no leftover panel references, that its pixel size matches the panel-bbox union at the conversion dpi (PyMuPDF rounds the clip outward, so up to three pixels more is rounding rather than a stale crop), that the crop rectangle overlaps no text-bearing block on its page, and that every image reference resolves. It exits non-zero on any failure and prints the contact sheet path.
+
+Then the visual pass: read that contact sheet with `vision_analyze` — the image arrives in the conversation and the review proceeds on its description, so this works even when the model is text-first. A correct crop shows every panel with its axes, titles, and legends, and no body or caption text. Keep the sheet in the system temporary directory (the script's default) so the paper directory keeps its documented footprint.
+
+Put verification code in a script file under the scratch directory rather than a shell heredoc: a heredoc carrying `&` — bitwise operators, backgrounding — is refused by the terminal guard before it runs.
 
 ## When to use
 
