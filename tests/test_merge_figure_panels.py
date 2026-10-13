@@ -73,6 +73,19 @@ class FindGroupsTests(unittest.TestCase):
         groups = find_groups(items)
         self.assertEqual([g["figure"] for g in groups], [21])
 
+    def test_blank_caption_string_is_not_a_caption(self):
+        """A panel whose caption list holds an empty string is still an uncaptioned panel."""
+        items = [
+            panel(10, 300, 400, "a.jpg", ["(a) cumulative evasion"]),
+            panel(10, 410, 500, "b.jpg", [""]),
+            panel(10, 510, 620, "c.jpg",
+                  ["(b) per-round marginal evasion", "(c) transfer to independent reviewers",
+                   "Figure 8: Retry-only control and transfer to an independent review panel."]),
+        ]
+        groups = find_groups(items)
+        self.assertEqual([g["figure"] for g in groups], [8])
+        self.assertEqual(len(groups[0]["panels"]), 3)
+
     def test_panel_label_on_first_panel_does_not_close_the_run(self):
         items = [
             panel(4, 300, 420, "panel-a.jpg", ["(a) scaling on the face pool"]),

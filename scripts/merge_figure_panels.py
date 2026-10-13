@@ -60,7 +60,7 @@ def captions_of(item: dict) -> list[str]:
             caps = [cap]
     else:
         caps = []
-    return [c for c in caps if isinstance(c, str)]
+    return [c for c in caps if isinstance(c, str) and c.strip()]
 
 
 def figure_caption(caps: list[str]):
