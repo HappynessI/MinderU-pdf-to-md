@@ -449,6 +449,32 @@ Hello again.
             "代码见 https://example.com/project. 获取。",
         )
 
+    def test_shorter_preserved_url_does_not_split_a_longer_one(self):
+        source = (
+            "Broken link https://arxiv. org/abs/2504.19413.\n"
+            "Full link https://arxiv.org/abs/2407.00402.\n"
+        )
+        self.assertEqual(
+            translator.normalize_preserved_url_boundaries(source, source),
+            source,
+        )
+        translated = "完整链接 https://arxiv.org/abs/2407.00402.见上文。"
+        self.assertEqual(
+            translator.normalize_preserved_url_boundaries(source, translated),
+            "完整链接 https://arxiv.org/abs/2407.00402. 见上文。",
+        )
+
+    def test_translated_document_may_add_do_not_translate_terms(self):
+        source = "The model splits the input into tokens."
+        translated = "模型把输入切分成 token，并为每个 token 计算代价。"
+        translator.validate_final_document(source, translated, ("token",))
+        with self.assertRaises(translator.TranslationError):
+            translator.validate_final_document(
+                "See $a$ and $b$.",
+                "见 $a$。",
+                (),
+            )
+
     def test_changed_or_missing_placeholder_is_rejected(self):
         protected = translator.protect_markdown("Text $x+y$ and `code`")
         damaged = protected.text.replace(protected.replacements[0][0], "missing", 1)

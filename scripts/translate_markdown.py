@@ -541,6 +541,10 @@ def chunk_document(parts: Sequence[DocumentPart], max_chars: int) -> List[Docume
     return result
 
 
+URL_TOKEN_PATTERN = re.compile(
+    r"(?:https?://|mailto:)[^\s<>()。！？；，、]+",
+)
+
 PROTECTED_PATTERN = re.compile(
     r"(?:```[^\n]*\n.*?```|~~~[^\n]*\n.*?~~~)"
     r"|(?:<!--.*?-->)"
@@ -554,8 +558,9 @@ PROTECTED_PATTERN = re.compile(
     r"|(?:(?<=\]\()[^)\n]+(?=\)))"
     r"|(?:</?[A-Za-z][^>]*>)"
     r"|(?:&(?:[A-Za-z][A-Za-z0-9]+|#[0-9]+|#x[0-9A-Fa-f]+);)"
-    r"|(?:https?://[^\s<>()。！？；，、]+)"
-    r"|(?:mailto:[^\s<>()。！？；，、]+)",
+    r"|(?:"
+    + URL_TOKEN_PATTERN.pattern
+    + r")",
     re.DOTALL,
 )
 
@@ -652,13 +657,31 @@ def validate_structure(source: str, translated: str) -> None:
             raise TranslationError(f"翻译前后的 HTML 表格标记数量不一致：{marker}")
 
 
-def validate_final_document(source: str, translated: str) -> None:
-    """Validate invariants again after all translated and literal chunks are joined."""
+def validate_final_document(
+    source: str, translated: str, terms: Sequence[str] = ()
+) -> None:
+    """Validate invariants again after all translated and literal chunks are joined.
+
+    Do-not-translate terms are left out of the placeholder comparison: a
+    translation legitimately writes an English term such as ``token`` more
+    often than the source did (the source may have said ``tokens``), and every
+    term occurrence the source did carry is already enforced by the exact
+    placeholder check in :func:`restore_markdown`.
+    """
     validate_structure(source, translated)
     if "__MDT_" in translated:
         raise TranslationError("最终 Markdown 中残留了保护占位符")
-    source_protected = [value for _placeholder, value in protect_markdown(source).replacements]
-    target_protected = [value for _placeholder, value in protect_markdown(translated).replacements]
+    excluded = set(terms)
+    source_protected = [
+        value
+        for _placeholder, value in protect_markdown(source).replacements
+        if value not in excluded
+    ]
+    target_protected = [
+        value
+        for _placeholder, value in protect_markdown(translated).replacements
+        if value not in excluded
+    ]
     if Counter(source_protected) != Counter(target_protected):
         raise TranslationError("最终 Markdown 中的公式、代码、链接、图片或 HTML 结构发生变化")
     source_ordered = [
@@ -695,21 +718,41 @@ def normalize_accidental_term_code_spans(
     return normalized
 
 
+URL_WORD_CHARACTER = re.compile(r"[A-Za-z0-9_\u4e00-\u9fff]")
+
+
 def normalize_preserved_url_boundaries(source: str, translated: str) -> str:
-    """Keep restored URLs separate from adjacent translated word characters."""
+    """Keep restored URLs separate from adjacent translated word characters.
+
+    The document is scanned once for maximal URL tokens. A space is inserted
+    only when a token continues past a preserved URL into a translated word.
+    Rewriting each preserved URL over the whole document instead would let a
+    short URL such as ``https://arxiv.`` match inside the longer preserved URL
+    ``https://arxiv.org/abs/2407.00402.`` and split that URL apart.
+    """
     urls = {
         value
         for _placeholder, value in protect_markdown(source).replacements
         if value.startswith(("http://", "https://", "mailto:"))
     }
-    normalized = translated
-    for url in sorted(urls, key=len, reverse=True):
-        normalized = re.sub(
-            re.escape(url) + r"(?=[A-Za-z0-9_\u4e00-\u9fff])",
-            lambda _match: url + " ",
-            normalized,
-        )
-    return normalized
+    if not urls:
+        return translated
+
+    def separate(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if token in urls:
+            return token
+        prefix = ""
+        for url in urls:
+            if len(url) > len(prefix) and token.startswith(url):
+                prefix = url
+        if not prefix:
+            return token
+        if not URL_WORD_CHARACTER.match(token[len(prefix)]):
+            return token
+        return prefix + " " + token[len(prefix):]
+
+    return URL_TOKEN_PATTERN.sub(separate, translated)
 
 
 STRONG_MARKER_RE = re.compile(r"(?<!\\)(?:\*\*|__)")
@@ -1247,7 +1290,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 value = normalize_preserved_url_boundaries(text, value)
                 value = normalize_emphasis_boundaries(text, value)
-                validate_final_document(text, value)
+                validate_final_document(text, value, do_not_translate_terms)
                 return value
 
             key = key_for(text)
@@ -1336,7 +1379,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         if not translated_markdown.strip():
             raise TranslationError("翻译结果为空")
-        validate_final_document(translation_source, translated_markdown)
+        validate_final_document(translation_source, translated_markdown, do_not_translate_terms)
         if args.copy_assets:
             output_markdown = translated_markdown
             copied_assets = copy_assets(translated_markdown, source, output_dir)
