@@ -172,7 +172,8 @@ Verify the translation:
 2. Confirm that API calls, cache hits, shared or copied asset count, and token usage are plausible.
 3. Verify that every relative image reference resolves from the translated Markdown.
 4. Confirm that table images match the original tables and captions remain translated; confirm no HTML or Markdown table bodies remain in default image mode.
-5. Compare representative headings, formulas, figure captions, table captions, and paragraphs with the source.
+5. Unify terminology across the chunks before reporting; chunked translation renders one source term several ways (`Setting-2` beside `设置 2`, `逃避` beside `规避`). Count each candidate first (`grep -o 逃避 full-CN.md | wc -l`), pick the dominant rendering, replace globally with a short script, then re-read every sentence the replacement touched — a global replace applied to a verb breaks grammar. Unify the paper's own structural labels in the same pass (`Setting-<N>` → `设置 N`), and normalize figure/table caption numbering at line start to `图N：` / `表N：` so captions match the citation style used in the knowledge base. Rewrite the translation only: `full.md` stays the source of record.
+6. Compare representative headings, formulas, figure captions, table captions, and paragraphs with the source.
 
 ### 4. Report the result
 
