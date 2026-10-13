@@ -7,9 +7,14 @@ crops the whole panel region out of the original PDF page at high resolution, sa
 as `images/figure-NN.jpg`, and rewrites the Markdown (source and translation, if given)
 so each figure carries exactly one image reference and one caption.
 
-Panels are detected, not guessed: in the content list every panel but the last has an
-empty `chart_caption`, and the last one carries `Figure N. ...`. Tables are a different
-block type (`table`), so a table image sitting above a figure is never absorbed.
+Panels are detected, not guessed. In the content list the closing block carries
+`Figure N: ...` (VLM output uses a colon as often as a period), each earlier panel has
+either an empty caption or only its own `(a)`/`(b)` panel label. Captions are read from
+the block-type-specific key (`chart_caption`, `image_caption`, `table_caption`): MinerU
+sometimes types one panel of a figure as a `table` block while keeping the figure
+caption, so that block is treated as a panel. A table block carrying a `Table N` caption —
+or no caption at all — is never absorbed, so a real table image sitting above a figure
+stays out of the crop.
 
 Usage:
   python3 merge_figure_panels.py PAPER.pdf --mineru-dir DIR \
@@ -28,8 +33,9 @@ import sys
 from pathlib import Path
 
 IMGREF = re.compile(r'!\[\]\((?:\.\./)?images/([0-9a-f]+\.jpg)\)')
-CAPTION = re.compile(r'^\s*(?:Figure|图)\s*(\d+)[.。]')
-PANEL_LABEL = re.compile(r'^\([a-z]\)')
+CAPTION = re.compile(r'^\s*(?:Figure|图)\s*(\d+)\s*[.．:：。]')
+PANEL_LABEL = re.compile(r'^\s*[（(][a-z][）)]')
+CAPTION_KEY = {'chart': 'chart_caption', 'image': 'image_caption', 'table': 'table_caption'}
 
 
 def load_content_list(mineru_dir: Path) -> list[dict]:
@@ -39,43 +45,55 @@ def load_content_list(mineru_dir: Path) -> list[dict]:
     return json.loads(cands[0].read_text(encoding='utf-8'))
 
 
+def captions_of(item: dict) -> list[str]:
+    """Caption strings of a content-list block, read from its type-specific key."""
+    key = CAPTION_KEY.get(item.get('type'))
+    if not key:
+        return []
+    cap = item.get(key)
+    if isinstance(cap, list):
+        caps = cap
+    elif isinstance(cap, str) and cap.strip():
+        try:
+            caps = json.loads(cap)
+        except json.JSONDecodeError:
+            caps = [cap]
+    else:
+        caps = []
+    return [c for c in caps if isinstance(c, str)]
+
+
+def figure_caption(caps: list[str]):
+    """Return the match of the `Figure N` caption among these caption strings."""
+    for c in caps:
+        m = CAPTION.match(c)
+        if m:
+            return m
+    return None
+
+
 def find_groups(items: list[dict]) -> list[dict]:
     """Return [{figure:int, panels:[item,...]}] for every split multi-panel figure."""
     groups = []
     for i, item in enumerate(items):
-        if item.get('type') not in ('chart', 'image'):
+        if item.get('type') not in CAPTION_KEY:
             continue
-        cap = (item.get('chart_caption') or '[]')
-        try:
-            caps = json.loads(cap) if isinstance(cap, str) else cap
-        except json.JSONDecodeError:
-            caps = []
-        if not caps:
-            continue
-        m = None
-        for c in caps:
-            mm = re.match(r'\s*Figure\s+(\d+)[.]', c)
-            if mm:
-                m = mm
-                break
+        m = figure_caption(captions_of(item))
         if not m:
             continue
         run = [item]
         j = i - 1
         while j >= 0:
             prev = items[j]
-            if prev.get('type') not in ('chart', 'image'):
-                break
             if prev.get('page_idx') != item.get('page_idx'):
                 break
-            pc = prev.get('chart_caption') or '[]'
-            try:
-                pcaps = json.loads(pc) if isinstance(pc, str) else pc
-            except json.JSONDecodeError:
-                pcaps = []
+            if prev.get('type') not in ('chart', 'image'):
+                # Only chart/image blocks precede a figure as panels; a `table` block
+                # carries its own caption, so absorbing one would swallow a real table.
+                break
             # A panel may carry its own (a)/(b) label; only a real figure caption
             # closes the run.
-            pcaps = [c for c in pcaps if not PANEL_LABEL.match(c.strip())]
+            pcaps = [c for c in captions_of(prev) if not PANEL_LABEL.match(c)]
             if pcaps:
                 break
             run.insert(0, prev)

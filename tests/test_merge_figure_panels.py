@@ -13,13 +13,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from merge_figure_panels import find_groups, rewrite_markdown  # noqa: E402
 
 
+CAPTION_KEY = {"chart": "chart_caption", "image": "image_caption", "table": "table_caption"}
+
+
 def panel(page: int, y0: int, y1: int, name: str, captions=None, kind="chart") -> dict:
     return {
         "type": kind,
         "page_idx": str(page),
         "bbox": [100, y0, 500, y1],
         "img_path": f"images/{name}",
-        "chart_caption": json.dumps(captions or []),
+        CAPTION_KEY.get(kind, "chart_caption"): json.dumps(captions or []),
     }
 
 
@@ -36,6 +39,39 @@ class FindGroupsTests(unittest.TestCase):
         self.assertEqual([g["figure"] for g in groups], [16])
         self.assertEqual([p["img_path"] for p in groups[0]["panels"]],
                          ["images/panel-a.jpg", "images/panel-b.jpg"])
+
+    def test_colon_caption_from_vlm_output_closes_the_run(self):
+        """VLM output writes `Figure N: ...`; the period-only pattern missed every figure."""
+        items = [
+            panel(7, 88, 209, "panel-a.jpg"),
+            panel(7, 88, 209, "panel-b.jpg"),
+            panel(7, 88, 210, "panel-c.jpg", ["Figure 4: Quality ratings and evasion."]),
+        ]
+        groups = find_groups(items)
+        self.assertEqual([g["figure"] for g in groups], [4])
+        self.assertEqual(len(groups[0]["panels"]), 3)
+
+    def test_table_typed_panel_carrying_figure_caption_joins_the_run(self):
+        """MinerU sometimes types one panel as `table` while keeping the figure caption."""
+        items = [
+            {"type": "text", "page_idx": "7", "bbox": [0, 0, 10, 10], "text": "prose"},
+            panel(7, 378, 585, "upper.jpg"),
+            panel(7, 589, 705, "lower.jpg",
+                  ["Figure 5: Craft rating and evasion by model."], kind="table"),
+        ]
+        groups = find_groups(items)
+        self.assertEqual([g["figure"] for g in groups], [5])
+        self.assertEqual([p["img_path"] for p in groups[0]["panels"]],
+                         ["images/upper.jpg", "images/lower.jpg"])
+
+    def test_image_type_panel_is_read_from_image_caption(self):
+        """`image` blocks carry `image_caption`, not `chart_caption`."""
+        items = [
+            panel(9, 300, 400, "a.jpg", kind="image"),
+            panel(9, 410, 520, "b.jpg", ["Figure 21: Two views."], kind="image"),
+        ]
+        groups = find_groups(items)
+        self.assertEqual([g["figure"] for g in groups], [21])
 
     def test_panel_label_on_first_panel_does_not_close_the_run(self):
         items = [
