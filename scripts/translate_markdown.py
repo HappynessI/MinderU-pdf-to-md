@@ -542,7 +542,13 @@ def chunk_document(parts: Sequence[DocumentPart], max_chars: int) -> List[Docume
 
 
 URL_TOKEN_PATTERN = re.compile(
-    r"(?:https?://|mailto:)[^\s<>()。！？；，、]+",
+    # A URL ends at whitespace, an ASCII bracket, or CJK/full-width punctuation.
+    # The full-width ranges matter on the target side: a translation turns `(url)`
+    # into `（url）`, and if the pattern ran past `）` the token would swallow the
+    # Chinese that follows it, so the protected-value multiset no longer matched the
+    # source and the whole run died in the final validation.
+    r"(?:https?://|mailto:)[^\s<>()。！？；，、"
+    r"\u3000-\u303f\u2018-\u201f\uff00-\uffef]+",
 )
 
 PROTECTED_PATTERN = re.compile(

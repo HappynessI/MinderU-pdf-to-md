@@ -464,6 +464,16 @@ Hello again.
             "完整链接 https://arxiv.org/abs/2407.00402. 见上文。",
         )
 
+    def test_full_width_bracket_closes_a_preserved_url(self):
+        """`（url）` in the translation must not glue the Chinese behind it onto the URL."""
+        source = "We used the RetinaFace model (https://github.com/serengil/retinaface) to detect faces."
+        translated = "我们使用了 RetinaFace 模型（https://github.com/serengil/retinaface）来检测人脸。"
+        self.assertEqual(
+            translator.normalize_preserved_url_boundaries(source, translated),
+            translated,
+        )
+        translator.validate_final_document(source, translated, ())
+
     def test_translated_document_may_add_do_not_translate_terms(self):
         source = "The model splits the input into tokens."
         translated = "模型把输入切分成 token，并为每个 token 计算代价。"
