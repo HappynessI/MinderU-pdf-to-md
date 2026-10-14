@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +29,9 @@ class TranslationMockHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         payload = json.loads(body)
         self.server.requests.append((self.path, self.headers, payload))
+        delay = getattr(self.server, "delay_seconds", 0.0)
+        if delay:
+            time.sleep(delay)
         source = payload["messages"][1]["content"]
         def translate(value):
             return (
@@ -65,14 +69,27 @@ class TranslationMockHandler(BaseHTTPRequestHandler):
         return
 
 
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """A server that does not print a traceback when a client walks away.
+
+    The read-timeout test makes the client stop waiting before the handler answers, so
+    the handler's own write fails; that is the point of the test, not a failure.
+    """
+
+    def handle_error(self, request, client_address):
+        return
+
+
 class MockServer:
-    def __init__(self, *, corrupt_over_chars=None):
+    def __init__(self, *, corrupt_over_chars=None, delay_seconds=0.0):
         self.corrupt_over_chars = corrupt_over_chars
+        self.delay_seconds = delay_seconds
 
     def __enter__(self):
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), TranslationMockHandler)
+        self.server = _QuietThreadingHTTPServer(("127.0.0.1", 0), TranslationMockHandler)
         self.server.requests = []
         self.server.corrupt_over_chars = self.corrupt_over_chars
+        self.server.delay_seconds = self.delay_seconds
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         host, port = self.server.server_address
@@ -473,6 +490,27 @@ Hello again.
             translated,
         )
         translator.validate_final_document(source, translated, ())
+
+    def test_read_timeout_is_retried_not_fatal(self):
+        """A slow response must end as TranslationError after retries, not escape the loop.
+
+        A read timeout arrives as socket.timeout, which used to leave chat_completion
+        uncaught and abort a run whose other chunks were already cached.
+        """
+        with MockServer(delay_seconds=1.2) as server:
+            with self.assertRaises(translator.TranslationError):
+                translator.chat_completion(
+                    base_url=server.base_url,
+                    api_key="sk-test",
+                    model="ds-v4-flash",
+                    system_prompt="Translate.",
+                    markdown="Hello",
+                    timeout=0.4,
+                    retries=2,
+                    max_output_tokens=64,
+                    thinking="auto",
+                )
+            self.assertEqual(len(server.server.requests), 2)
 
     def test_translated_document_may_add_do_not_translate_terms(self):
         source = "The model splits the input into tokens."

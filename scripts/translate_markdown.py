@@ -886,6 +886,10 @@ def chat_completion(
                 raise last_error from exc
         except urllib.error.URLError as exc:
             last_error = TranslationError(f"无法连接翻译 API：{exc.reason}")
+        except OSError as exc:
+            # A read timeout arrives as socket.timeout, not URLError: without this clause
+            # it left the retry loop entirely and ended the run.
+            last_error = TranslationError(f"翻译 API 请求失败：{exc}")
         except (UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
             last_error = TranslationError("翻译 API 返回了无法解析的响应")
 
@@ -1316,17 +1320,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             protected = protect_markdown(text, do_not_translate_terms)
             last_structure_error: Optional[TranslationError] = None
             for structure_attempt in range(1, args.structure_retries + 1):
-                raw_translation, usage = chat_completion(
-                    base_url=args.base_url,
-                    api_key=api_key,
-                    model=model,
-                    system_prompt=prompt,
-                    markdown=protected.text,
-                    timeout=args.request_timeout,
-                    retries=max(1, args.retries),
-                    max_output_tokens=args.max_output_tokens,
-                    thinking=args.thinking,
-                )
+                try:
+                    raw_translation, usage = chat_completion(
+                        base_url=args.base_url,
+                        api_key=api_key,
+                        model=model,
+                        system_prompt=prompt,
+                        markdown=protected.text,
+                        timeout=args.request_timeout,
+                        retries=max(1, args.retries),
+                        max_output_tokens=args.max_output_tokens,
+                        thinking=args.thinking,
+                    )
+                except TranslationError as exc:
+                    # A request-level failure (dropped connection, read timeout) takes the
+                    # same retry-and-split path as a structure failure: one slow response
+                    # on one large chunk must not invalidate the whole run.
+                    last_structure_error = exc
+                    if structure_attempt < args.structure_retries:
+                        eprint(f"翻译块 {label} 请求失败，正在重试…")
+                    continue
                 api_calls += 1
                 add_usage(state["usage"], usage)
                 try:
