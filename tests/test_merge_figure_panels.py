@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from merge_figure_panels import find_groups, rewrite_markdown  # noqa: E402
+from merge_figure_panels import clamp_edges, find_groups, rewrite_markdown  # noqa: E402
 
 
 CAPTION_KEY = {"chart": "chart_caption", "image": "image_caption", "table": "table_caption"}
@@ -172,6 +172,49 @@ class RewriteMarkdownTests(unittest.TestCase):
             encoding="utf-8")
         rewrite_markdown(self.md, self.group, "figure-12.jpg", "../")
         self.assertIn("![](../images/figure-12.jpg)\n", self.md.read_text(encoding="utf-8"))
+
+
+class ClampEdgesTests(unittest.TestCase):
+    """A padded crop edge must not land inside a line of text."""
+
+    def test_bottom_edge_is_pulled_above_the_caption_line(self):
+        # union ends at 300; padding reaches 305, which sits inside a line at 303-311.
+        edges = (50, 100, 550, 305)
+        union = (55, 105, 545, 300)
+        lines = [(55, 303, 545, 311)]
+        got = clamp_edges(edges, union, lines)
+        self.assertLessEqual(got[3], 303)
+        self.assertGreaterEqual(got[3], 300)
+
+    def test_top_edge_is_pushed_below_the_text_above(self):
+        edges = (50, 96, 550, 305)
+        union = (55, 101, 545, 300)
+        lines = [(55, 88, 545, 95.5)]
+        got = clamp_edges(edges, union, lines)
+        self.assertGreaterEqual(got[1], 96)
+        self.assertLessEqual(got[1], 101)
+
+    def test_padding_is_kept_when_no_line_is_crossed(self):
+        edges = (50, 100, 550, 305)
+        union = (55, 105, 545, 300)
+        lines = [(55, 320, 545, 328)]
+        self.assertEqual(clamp_edges(edges, union, lines), edges)
+
+    def test_line_covering_the_box_shrinks_to_the_union_edge(self):
+        edges = (50, 100, 550, 305)
+        union = (55, 105, 545, 300)
+        lines = [(55, 200, 545, 400)]  # spans the whole union: it cannot be excluded
+        got = clamp_edges(edges, union, lines)
+        self.assertEqual(got, (50, 100, 550, 300))
+        # and the box never shrinks past the panel union
+        self.assertGreaterEqual(got[3], union[3])
+        self.assertLessEqual(got[1], union[1])
+
+    def test_line_clear_of_the_box_horizontally_is_ignored(self):
+        edges = (50, 100, 550, 305)
+        union = (55, 105, 545, 300)
+        lines = [(560, 303, 600, 311)]
+        self.assertEqual(clamp_edges(edges, union, lines), edges)
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from merge_figure_panels import find_groups, load_content_list  # noqa: E402
+from merge_figure_panels import crop_rect, find_groups, load_content_list  # noqa: E402
 
 TEXTY = ('text', 'header', 'footer', 'page_number', 'page_footnote', 'aside_text')
 IMGREF = re.compile(r'!\[\]\((?:[^)]*/)?images/([^)]+)\)')
@@ -47,16 +47,6 @@ IMGREF = re.compile(r'!\[\]\((?:[^)]*/)?images/([^)]+)\)')
 def _fitz():
     import pymupdf
     return pymupdf
-
-
-def crop_rect(pymupdf, page, panels, pad):
-    """Union of the panel bboxes, on the page's point grid, grown by pad."""
-    sx, sy = page.rect.width / 1000.0, page.rect.height / 1000.0
-    xs0 = [p['bbox'][0] * sx for p in panels]
-    ys0 = [p['bbox'][1] * sy for p in panels]
-    xs1 = [p['bbox'][2] * sx for p in panels]
-    ys1 = [p['bbox'][3] * sy for p in panels]
-    return pymupdf.Rect(min(xs0) - pad, min(ys0) - pad, max(xs1) + pad, max(ys1) + pad)
 
 
 def text_hits(pymupdf, page, items, page_idx, rect, tolerance):

@@ -103,22 +103,103 @@ def find_groups(items: list[dict]) -> list[dict]:
     return groups
 
 
+def text_line_rects(pymupdf, page) -> list[tuple]:
+    """Text-line rectangles of one page, read from the PDF's own text layer.
+
+    Line granularity, not paragraph: a crop edge that lands inside a line is moved to
+    that line's near side, and the move is bounded by one line's height. A page without
+    a text layer (scanned PDF converted with --ocr) yields no rects and no clamping.
+    """
+    rects = []
+    try:
+        data = page.get_text('dict')
+    except Exception:
+        return rects
+    for block in data.get('blocks', []):
+        if block.get('type') != 0:
+            continue
+        for line in block.get('lines', []):
+            bbox = line.get('bbox')
+            if not bbox:
+                continue
+            spans = line.get('spans', [])
+            if not ''.join(s.get('text', '') for s in spans).strip():
+                continue
+            rects.append(tuple(float(v) for v in bbox))
+    return rects
+
+
+EDGE_MARGIN = 0.5
+
+
+def clamp_edges(edges, union, text_rects, margin: float = EDGE_MARGIN,
+                passes: int = 4) -> tuple:
+    """Pull a padded crop box off any line of text its edges would slice in half.
+
+    `edges` is the padded box `(x0, y0, x1, y1)` on the page's point grid, `union` the
+    panel-bbox union: padding may shrink to zero, never grow. A line crossing an edge is
+    excluded by moving that edge to the line's near side, so the reader never sees half a
+    glyph row. A line that sits inside `union` cannot be excluded and is left alone.
+    """
+    x0, y0, x1, y1 = edges
+    ux0, uy0, ux1, uy1 = union
+    for _ in range(passes):
+        moved = False
+        for rx0, ry0, rx1, ry1 in text_rects:
+            if rx1 <= x0 or rx0 >= x1:
+                continue
+            if ry0 < y1 < ry1:
+                new = max(uy1, min(y1, ry0 - margin))
+                if new < y1 - 1e-9:
+                    y1, moved = new, True
+                    continue
+            if ry0 < y0 < ry1:
+                new = min(uy0, max(y0, ry1 + margin))
+                if new > y0 + 1e-9:
+                    y0, moved = new, True
+                    continue
+        for rx0, ry0, rx1, ry1 in text_rects:
+            if ry1 <= y0 or ry0 >= y1:
+                continue
+            if rx0 < x0 < rx1:
+                new = min(ux0, max(x0, rx1 + margin))
+                if new > x0 + 1e-9:
+                    x0, moved = new, True
+                    continue
+            if rx0 < x1 < rx1:
+                new = max(ux1, min(x1, rx0 - margin))
+                if new < x1 - 1e-9:
+                    x1, moved = new, True
+                    continue
+        if not moved:
+            break
+    return (x0, y0, x1, y1)
+
+
+def crop_rect(pymupdf, page, panels: list[dict], pad: float, clamp_text: bool = True):
+    """Union of the panel bboxes, on the page's point grid, grown by pad.
+
+    The padded box is then clamped off any text line it would slice (see `clamp_edges`).
+    """
+    sx, sy = page.rect.width / 1000.0, page.rect.height / 1000.0
+    xs0 = [p['bbox'][0] * sx for p in panels]
+    ys0 = [p['bbox'][1] * sy for p in panels]
+    xs1 = [p['bbox'][2] * sx for p in panels]
+    ys1 = [p['bbox'][3] * sy for p in panels]
+    union = (min(xs0), min(ys0), max(xs1), max(ys1))
+    box = (union[0] - pad, union[1] - pad, union[2] + pad, union[3] + pad)
+    if clamp_text:
+        box = clamp_edges(box, union, text_line_rects(pymupdf, page))
+    return pymupdf.Rect(*box)
+
+
 def crop_group(doc, group: dict, out_dir: Path, dpi: int, pad: float) -> tuple[str, str]:
     panels = group['panels']
     page_idx = panels[0]['page_idx']
     page = doc[page_idx]
-    scale_x = page.rect.width / 1000.0
-    scale_y = page.rect.height / 1000.0
-    xs0, ys0, xs1, ys1 = [], [], [], []
-    for p in panels:
-        b = p['bbox']
-        xs0.append(b[0] * scale_x)
-        ys0.append(b[1] * scale_y)
-        xs1.append(b[2] * scale_x)
-        ys1.append(b[3] * scale_y)
     import pymupdf
 
-    rect = pymupdf.Rect(min(xs0) - pad, min(ys0) - pad, max(xs1) + pad, max(ys1) + pad)
+    rect = crop_rect(pymupdf, page, panels, pad)
     z = dpi / 72.0
     pix = page.get_pixmap(clip=rect, matrix=pymupdf.Matrix(z, z), colorspace=pymupdf.csRGB)
     name = f'figure-{group["figure"]:02d}.jpg'
@@ -195,6 +276,7 @@ def main() -> int:
         if args.dry_run:
             entry['status'] = 'dry-run'
         else:
+            results = []
             for rel, prefix in [(args.markdown, ''), (args.translation, '../')]:
                 if not rel:
                     continue
@@ -202,7 +284,17 @@ def main() -> int:
                 if not p.exists():
                     entry[str(rel)] = 'missing file'
                     continue
-                entry[str(rel)] = rewrite_markdown(p, g, name, prefix)
+                res = rewrite_markdown(p, g, name, prefix)
+                entry[str(rel)] = res
+                results.append(res)
+            # A rejected group leaves no Markdown reference to the crop it just wrote:
+            # drop that orphan, or the contact sheet shows a figure/table mashup that
+            # was never wired into the document.
+            if results and all(r.startswith('skip:') and 'already merged' not in r
+                               for r in results):
+                (images_dir / name).unlink(missing_ok=True)
+                entry['status'] = (f'{args.images_subdir}/{name} removed '
+                                   '- crop is unreferenced, group rejected')
         report.append(entry)
 
     print(json.dumps(report, ensure_ascii=False, indent=2))
