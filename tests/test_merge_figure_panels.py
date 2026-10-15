@@ -10,7 +10,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from merge_figure_panels import clamp_edges, find_groups, rewrite_markdown  # noqa: E402
+from merge_figure_panels import (  # noqa: E402
+    clamp_edges,
+    find_groups,
+    rewrite_markdown,
+    rewrite_plan,
+)
 
 
 CAPTION_KEY = {"chart": "chart_caption", "image": "image_caption", "table": "table_caption"}
@@ -124,6 +129,25 @@ class RewriteMarkdownTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_rewrite_plan_decides_without_writing(self):
+        """The verifier needs the verdict, so the decision is available on its own."""
+        accepted = ("![](images/aaaa.jpg)\n"
+                    "![](images/bbbb.jpg)\n"
+                    "![](images/cccc.jpg)\n")
+        status, new_text = rewrite_plan(accepted, self.group, "figure-12.jpg", "")
+        self.assertTrue(status.startswith("merged 3 panels"))
+        self.assertIn("![](images/figure-12.jpg)\n", new_text)
+
+        # A figure and the table below it carry their own captions: one group shape the
+        # merge step must refuse, and the verifier must read the refusal as expected.
+        rejected = ("![](images/aaaa.jpg)\n\n"
+                    "Figure 4. An illustrative example.\n\n"
+                    "![](images/bbbb.jpg)\n"
+                    "![](images/cccc.jpg)\n")
+        status, new_text = rewrite_plan(rejected, self.group, "figure-04.jpg", "")
+        self.assertIn("unexpected content", status)
+        self.assertIsNone(new_text)
 
     def test_panels_collapse_to_one_ref_and_keep_panel_labels(self):
         self.md.write_text(

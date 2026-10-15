@@ -208,14 +208,20 @@ def crop_group(doc, group: dict, out_dir: Path, dpi: int, pad: float) -> tuple[s
     return name, f'{pix.width}x{pix.height}'
 
 
-def rewrite_markdown(path: Path, group: dict, new_name: str, prefix: str) -> str:
-    text = path.read_text(encoding='utf-8')
+def rewrite_plan(text: str, group: dict, new_name: str, prefix: str) -> tuple[str, str | None]:
+    """Decide whether a group may be collapsed into one image, and build the result.
+
+    Returns `(status, new_text)`. A rejected group returns a `skip: …` status and
+    `None`, so the caller can report the verdict without touching the file — the
+    verifier needs that verdict to tell a deliberately rejected group (a figure and a
+    table standing next to each other) apart from a merge that never ran.
+    """
     hashes = [Path(p['img_path']).name for p in group['panels']]
     spans = []
     for h in hashes:
         m = re.search(r'!\[\]\((?:\.\./)?images/' + re.escape(h) + r'\)', text)
         if not m:
-            return 'skip: already merged or refs not found'
+            return 'skip: already merged or refs not found', None
         spans.append(m)
     spans.sort(key=lambda m: m.start())
     span = text[spans[0].start():spans[-1].end()]
@@ -223,16 +229,22 @@ def rewrite_markdown(path: Path, group: dict, new_name: str, prefix: str) -> str
     panels = [ln.strip() for ln in leftovers.split('\n') if ln.strip()]
     bad = [ln for ln in panels if not PANEL_LABEL.match(ln)]
     if bad:
-        return f'skip: unexpected content between panels ({bad[0][:60]!r})'
+        return f'skip: unexpected content between panels ({bad[0][:60]!r})', None
     found = set(IMGREF.findall(span))
     if found != set(hashes):
-        return 'skip: panel refs are not contiguous'
+        return 'skip: panel refs are not contiguous', None
     new = f'![]({prefix}images/{new_name})\n'
     if panels:
         new += '\n'.join(panels) + '\n'
-    text = text[:spans[0].start()] + new + text[spans[-1].end():]
-    path.write_text(text, encoding='utf-8')
-    return f'merged {len(hashes)} panels -> images/{new_name}'
+    return f'merged {len(hashes)} panels -> images/{new_name}', (
+        text[:spans[0].start()] + new + text[spans[-1].end():])
+
+
+def rewrite_markdown(path: Path, group: dict, new_name: str, prefix: str) -> str:
+    status, new_text = rewrite_plan(path.read_text(encoding='utf-8'), group, new_name, prefix)
+    if new_text is not None:
+        path.write_text(new_text, encoding='utf-8')
+    return status
 
 
 def main() -> int:

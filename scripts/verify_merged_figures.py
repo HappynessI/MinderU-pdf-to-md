@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from merge_figure_panels import crop_rect, find_groups, load_content_list  # noqa: E402
+from merge_figure_panels import crop_rect, find_groups, load_content_list, rewrite_plan  # noqa: E402
 
 TEXTY = ('text', 'header', 'footer', 'page_number', 'page_footnote', 'aside_text')
 IMGREF = re.compile(r'!\[\]\((?:[^)]*/)?images/([^)]+)\)')
@@ -122,6 +122,28 @@ def main() -> int:
         name = f'figure-{fig:02d}.jpg'
         image = mineru / args.images_subdir / name
         entry = {'figure': fig, 'panels': len(panels), 'image': f'{args.images_subdir}/{name}'}
+        # `mergeable` is the merge step's own verdict on the current Markdown: only a run
+        # whose refs are all present with nothing but panel labels between them is one
+        # figure. Everything else is either already merged, or a group the step must
+        # leave unfolded — a figure with the table that follows it, wired as two images.
+        mergeable = any(rewrite_plan(text, g, name, '')[0].startswith('merged')
+                        for text in texts.values())
+        if not mergeable:
+            panels_present = any(any(Path(p['img_path']).name in text for p in panels)
+                                 for text in texts.values())
+            refs_wired = any(f'images/{name}' in text for text in texts.values())
+            if panels_present:
+                entry['status'] = ('left unfolded - panels wired as separate images; a figure '
+                                   'and the table beside it are not one figure')
+                report.append(entry)
+                continue
+            if not refs_wired:
+                entry['status'] = 'no reference'
+                failures.append(f'figure {fig}: neither {name} nor its panel refs appear in the '
+                                f'Markdown')
+                report.append(entry)
+                continue
+            # Already merged: fall through to the geometry, wiring and overlap checks.
         if not image.exists():
             entry['status'] = 'missing image'
             failures.append(f'figure {fig}: {name} does not exist')
