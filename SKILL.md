@@ -134,7 +134,9 @@ If the translation already exists, pass `--translation translation-zh-CN/full-CN
 
 ### 3. Translate English Markdown into Chinese
 
-Translate MinerU's `full.md`, or another Markdown document. The flat content list may be read locally to resolve MinerU table screenshots, but it is never sent to the translation model:
+Translate MinerU's `full.md`, or another Markdown document. Before translating a multi-section technical document, read its abstract, definitions/methods, and relevant appendix terminology. Create or reuse a small document-specific glossary beside the source (for example `translation-glossary.md`), with each English concept, preferred Chinese rendering, and applicable meaning. Distinguish ambiguous senses and preserve author-defined names. Pass it with `--glossary-file PATH` so every chunk, retry, and split receives the same terminology; an isolated chunk cannot infer terminology chosen in other chunks. Do not put paper-specific mappings in the global prompt. For a short standalone excerpt, a glossary is optional.
+
+The flat content list may be read locally to resolve MinerU table screenshots, but it is never sent to the translation model:
 
 ```bash
 python3 scripts/translate_markdown.py INPUT.md \
@@ -163,7 +165,7 @@ The translator:
 - replaces every table body with the matching original MinerU table crop;
 - fails when any table lacks a matching crop; do not silently keep HTML or Markdown table bodies;
 - translates headings, body prose, figure captions, table captions, and explanatory text outside tables;
-- protects formulas, code, image references, link destinations, URLs, and HTML tags;
+- protects formulas, code, image references, link destinations, URLs, and HTML tags; each API request also receives a read-only mapping for movable formula, inline-code, and term placeholders, so the model can interpret their meaning without modifying the protected source;
 - allows formulas, inline code, and protected terms to follow target-language word order while requiring the exact same protected-value multiset of formulas, code, images, links, URLs and HTML, and a fixed order for image, link, URL, HTML and fenced-code placeholders;
 - compares do-not-translate terms by their per-chunk placeholders rather than by document-wide count, because a translation legitimately writes an English term where the source spelled it differently (`tokens` → `token`); the placeholder check in `restore_markdown` still catches a term the model dropped;
 - leaves bibliography entries unchanged by default and translates the section heading;
@@ -188,6 +190,8 @@ Verify the translation:
    Read the abstract and a representative method paragraph for natural Chinese and contextual terminology. Check that operations and their objects are understandable, and that observed behavior has not become a claim about inherent capability. Structural checks alone do not establish translation quality. Preserve source structure by default; reformat sections when the user requests it.
 7. If the run dies with 「最终 Markdown 中的公式、代码、链接、图片或 HTML 结构发生变化」, rebuild the assembly locally from `.translation-state.json` before spending another API pass: every chunk is cached, so the difference localizes to one chunk in one command, and the cause is often a post-processing normalizer rather than the model's output — recipe in [references/translation-validation-recovery.md](references/translation-validation-recovery.md).
 8. A run that dies with a read timeout or a dropped connection has not lost its work: `chat_completion` retries the request, a failure that survives those retries counts as one of the structure attempts, and an exhausted chunk is split into smaller pieces instead of ending the run. Re-run the same command — every finished chunk is a cache hit and the run resumes at the chunk that failed. **Raise `--request-timeout` (default 180 s) for a long document before re-running**: a 78-page report's single chunk (up to `--max-chars` of dense appendix text) can exceed the default and time out twice in a row on a healthy API, and 600–900 s is cheap. Lowering `--max-chars` instead is the expensive mistake — chunk size is part of every cache key, so the whole document re-translates.
+
+For semantic QA, compare the abstract, a formula-bearing method paragraph, and an appendix paragraph with the source. Check subjects/objects, modifier attachment, model-versus-result identity, conjunctions, negation, conditions, comparison direction, and claim strength. Check glossary use across these sections, not just the abstract. If a phrase fails, revise the relevant prompt or scoped glossary and validate fresh model output; do not count manual edits as evidence that the prompt improved. A passing structural validator does not certify meaning. Report remaining defects honestly and retain the previous translation when comparing versions.
 
 ### 4. Report the result
 

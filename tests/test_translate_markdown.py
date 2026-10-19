@@ -591,5 +591,21 @@ Hello again.
             "Translated paragraph.\n\n",
         )
 
+class PlaceholderMeaningTests(unittest.TestCase):
+    def test_formula_context_preserves_roundtrip_and_excludes_assets(self):
+        source = "Evaluate $C_t$ with `score()` and token.\\n\\n![plot](images/plot.png)\\n"
+        protected = translator.protect_markdown(source, ["token"])
+        prompt = translator.build_chunk_prompt("Translate faithfully.", protected)
+        self.assertIn("$C_t$", prompt)
+        self.assertIn("`score()`", prompt)
+        self.assertIn("token", prompt)
+        self.assertNotIn("images/plot.png", prompt)
+        self.assertEqual(translator.restore_markdown(protected.text, protected), source)
+
+    def test_plain_prose_needs_no_reference_map(self):
+        protected = translator.protect_markdown("Plain prose.")
+        self.assertEqual(translator.build_chunk_prompt("Translate.", protected), "Translate.")
+
+
 if __name__ == "__main__":
     unittest.main()
