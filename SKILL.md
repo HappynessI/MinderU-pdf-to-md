@@ -215,12 +215,6 @@ After manual revision, treat the final Markdown as the maintained deliverable: c
 
 ## Keeping the published repo in sync (standing request)
 
-This skill is published at https://github.com/HappynessI/MinderU-pdf-to-md (public, branch `main`); that repo holds exactly this directory. Whenever anything here changes — `SKILL.md`, `scripts/`, `tests/`, `references/`, `do-not-translate.md` — push the change in the same turn instead of leaving local edits unpublished:
-
-```bash
-cd "$(mktemp -d)" && git clone https://github.com/HappynessI/MinderU-pdf-to-md.git repo
-rsync -a --delete --exclude .git ~/.hermes/skills/productivity/mineru-pdf-to-md/ repo/
-cd repo && git add -A && git status --short        # review before committing
-```
+The user authorizes automatic synchronization with https://github.com/HappynessI/MinderU-pdf-to-md (branch `main`) whenever this skill is modified, including fixes requested because its output was unsatisfactory. In the same task, apply the focused changes to both the installed skill and the repository, validate them, commit and push, and verify the remote result. Do not wait for another request to push. Preserve unrelated differences between installed copies and the repository; do not overwrite either directory wholesale. If synchronization fails, report the local and remote status accurately. Use a dedicated workspace `work/` directory for temporary clones and clean it after verified publication. Never commit credentials or generated paper artifacts.
 
 Run the suite first (`python3 -m unittest discover -s tests`) — CI runs the same command on Python 3.9 and 3.12, so keep new code and tests 3.9-safe. Commit in the repo's conventional style (`feat:` / `fix:` / `docs:`), one logical change per commit, then `git push`. Never commit credentials, `api/` token files, converted paper output, or `*-mineru/` directories. Verify the push landed (`gh repo view HappynessI/MinderU-pdf-to-md --json pushedAt`) rather than trusting the exit code alone. A `LibreSSL SSL_connect: SSL_ERROR_SYSCALL` failure on the push is transient on this host: retry the same command two or three times before suspecting the proxy configuration, then confirm the commit on the remote (`api.github.com/repos/<owner>/<repo>/commits?per_page=3`).
