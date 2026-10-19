@@ -921,6 +921,16 @@ Mandatory rules:
 6. Use concise, publication-quality academic language and consistent terminology.
 7. Preserve Markdown emphasis boundaries. Keep every strong marker (`**` or `__`) exactly once and keep source whitespace immediately before and after each marker; never merge a bold lead phrase into the following sentence.
 """
+    if target_language.lower() in {"zh", "zh-cn", "zh-hans"}:
+        prompt += """
+中文翻译质量要求：
+- 先理解句子描述的对象、操作和逻辑关系，再用自然、完整的中文表达。可以调整语序或拆分长句，但不得遗漏限定条件、增加解释、例子或原文没有的结论。
+- 根据当前语境确定词义，避免逐词硬译。数据集中的 row 通常指“一条数据记录”或“训练样本”；描述探索到的操作类型时，reach an action 应表达为“实际采用/探索到某类操作”。这些是语境示例，不是全文机械替换规则；矩阵或表格中的 row 仍可译为“行”。
+- 使用常见、准确的中文动词，明确谁对什么执行了什么操作。避免“达到一种动作”等难以理解的搭配，以及不必要的英文句式和抽象名词堆叠。专业术语保持准确，同一含义采用一致译法。
+- 严格保留作者的证据范围与语气。实验中未观察到某种行为，不得写成系统没有这种能力；suggest、may 等不确定表达不得强化为证明或必然结论。保留比较对象、因果关系、否定和条件。
+- 保持指标名称、数值、正负号、单位及相对提升/绝对提升的区别，不自行添加百分号或百分点。保留原文信息结构，不自行把正文改为摘要、列表或科普说明。
+- 输出前默读检查：中文是否自然，操作对象是否清楚，术语是否符合语境，事实与限定条件是否完整。只输出修订后的译文，不输出检查过程。
+"""
     if glossary:
         prompt += "\nRequired terminology:\n" + glossary + "\n"
     if do_not_translate:
@@ -971,6 +981,7 @@ def cache_key(
     do_not_translate_hash: str,
     thinking: str,
     processor_version: str,
+    system_prompt: str = "",
 ) -> str:
     payload = {
         "source": source,
@@ -981,6 +992,7 @@ def cache_key(
         "glossary_hash": glossary_hash,
         "do_not_translate_hash": do_not_translate_hash,
         "thinking": thinking,
+        "system_prompt": system_prompt,
     }
     if processor_version:
         payload["processor_version"] = processor_version
@@ -1286,6 +1298,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 do_not_translate_hash=do_not_translate_hash,
                 thinking=args.thinking,
                 processor_version="table-images-v1-do-not-translate-strong-markers-v1",
+                system_prompt=prompt,
             )
 
         def translate_chunk(text: str, label: str) -> str:
