@@ -193,6 +193,10 @@ Verify the translation:
 
 For semantic QA, compare the abstract, a formula-bearing method paragraph, and an appendix paragraph with the source. Check subjects/objects, modifier attachment, model-versus-result identity, conjunctions, negation, conditions, comparison direction, and claim strength. Check glossary use across these sections, not just the abstract. If a phrase fails, revise the relevant prompt or scoped glossary and validate fresh model output; do not count manual edits as evidence that the prompt improved. A passing structural validator does not certify meaning. Report remaining defects honestly and retain the previous translation when comparing versions.
 
+Treat fluency as a separate QA dimension from terminology and structural preservation. Check whether each reviewed sentence names an understandable action and object in natural Chinese; rewrite English metaphors, nominalizations, and misplaced modifier chains by meaning, not by global substitutions. Include results, conclusion, captions, and an appendix in sampling. When the user requests a whole-document review, read all prose and captions against the source; sampling is not a substitute. Preserve user edits and verified proper names. Do not invent Chinese author names from romanization.
+
+After manual revision, treat the final Markdown as the maintained deliverable: cached API chunks still contain the earlier machine translation and rerunning into that path may overwrite edits. Run prompt regression checks in a temporary work directory, distinguish their raw output from manual corrections, and remove redundant versions after verification unless requested for comparison or needed for a documented unresolved issue.
+
 ### 4. Report the result
 
 - For PDF conversion, report the Markdown path, MinerU mode, and any known extraction limitations.
