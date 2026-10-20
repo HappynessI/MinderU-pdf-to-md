@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 IMGREF = re.compile(r'!\[\]\((?:\.\./)?images/([0-9a-f]+\.jpg)\)')
-CAPTION = re.compile(r'^\s*(?:Figure|图)\s*(\d+)\s*[.．:：。]')
+CAPTION = re.compile(r'^\s*(?:Figure|Fig\.?|图)\s*(\d+)\s*[.．:：。]')
 PANEL_LABEL = re.compile(r'^\s*[（(][a-z][）)]')
 CAPTION_KEY = {'chart': 'chart_caption', 'image': 'image_caption', 'table': 'table_caption'}
 
@@ -176,10 +176,74 @@ def clamp_edges(edges, union, text_rects, margin: float = EDGE_MARGIN,
     return (x0, y0, x1, y1)
 
 
+INK_DPI = 150
+INK_LEVEL = 200
+INK_MIN_PIXELS = 3
+
+
+def ink_clamp(pymupdf, page, box, union, dpi: int = INK_DPI) -> tuple:
+    """Pull each padded edge inward until it no longer slices an inked glyph.
+
+    `clamp_edges` only knows text lines the PDF's own text layer exposes. Figure
+    sub-labels printed by some publishers (`(a) (b) (c)` above each panel) sit in the
+    padding band without appearing in that layer, so the text clamp cannot see them and
+    the crop ships a sliced glyph row. Render the padding band and read it directly: an
+    edge that starts inside inked pixels moves inward to the first clean scanline, and
+    the move is bounded by the panel union — padding shrinks to zero, never grows.
+    """
+    x0, y0, x1, y1 = box
+    ux0, uy0, ux1, uy1 = union
+
+    def band_counts(clip, rows: bool):
+        z = dpi / 72.0
+        pix = page.get_pixmap(clip=pymupdf.Rect(*clip), matrix=pymupdf.Matrix(z, z),
+                              colorspace=pymupdf.csGRAY, alpha=False)
+        import numpy as np
+        arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
+        return list((arr < INK_LEVEL).sum(axis=1 if rows else 0)), z
+
+    def inward(counts, z, start):
+        """Offset in points from `start` to the first clean scanline, or None."""
+        for i, c in enumerate(counts):
+            if c < INK_MIN_PIXELS:
+                return i / z
+        return None
+
+    # Each edge only moves when the outermost scanline of its own padding band is inked.
+    if uy0 - y0 > 0.5:
+        counts, z = band_counts((x0, y0, x1, uy0), rows=True)
+        if counts and counts[0] >= INK_MIN_PIXELS:
+            off = inward(counts, z, y0)
+            y0 = uy0 if off is None else min(uy0, y0 + off)
+
+    if y1 - uy1 > 0.5:
+        counts, z = band_counts((x0, uy1, x1, y1), rows=True)
+        if counts and counts[-1] >= INK_MIN_PIXELS:
+            clean = next((i for i in range(len(counts) - 1, -1, -1)
+                          if counts[i] < INK_MIN_PIXELS), None)
+            y1 = uy1 if clean is None else max(uy1, uy1 + (clean + 1) / z)
+
+    if ux0 - x0 > 0.5:
+        counts, z = band_counts((x0, y0, ux0, y1), rows=False)
+        if counts and counts[0] >= INK_MIN_PIXELS:
+            off = inward(counts, z, x0)
+            x0 = ux0 if off is None else min(ux0, x0 + off)
+
+    if x1 - ux1 > 0.5:
+        counts, z = band_counts((ux1, y0, x1, y1), rows=False)
+        if counts and counts[-1] >= INK_MIN_PIXELS:
+            clean = next((i for i in range(len(counts) - 1, -1, -1)
+                          if counts[i] < INK_MIN_PIXELS), None)
+            x1 = ux1 if clean is None else max(ux1, ux1 + (clean + 1) / z)
+
+    return (x0, y0, x1, y1)
+
+
 def crop_rect(pymupdf, page, panels: list[dict], pad: float, clamp_text: bool = True):
     """Union of the panel bboxes, on the page's point grid, grown by pad.
 
-    The padded box is then clamped off any text line it would slice (see `clamp_edges`).
+    The padded box is then clamped off any text line it would slice (see `clamp_edges`)
+    and off any inked glyph the text layer does not expose (see `ink_clamp`).
     """
     sx, sy = page.rect.width / 1000.0, page.rect.height / 1000.0
     xs0 = [p['bbox'][0] * sx for p in panels]
@@ -190,6 +254,7 @@ def crop_rect(pymupdf, page, panels: list[dict], pad: float, clamp_text: bool = 
     box = (union[0] - pad, union[1] - pad, union[2] + pad, union[3] + pad)
     if clamp_text:
         box = clamp_edges(box, union, text_line_rects(pymupdf, page))
+        box = ink_clamp(pymupdf, page, box, union)
     return pymupdf.Rect(*box)
 
 

@@ -13,9 +13,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from merge_figure_panels import (  # noqa: E402
     clamp_edges,
     find_groups,
+    ink_clamp,
     rewrite_markdown,
     rewrite_plan,
 )
+
+try:  # the ink clamp reads the rendered page, so its tests need the PDF stack
+    import pymupdf  # noqa: E402
+    import numpy  # noqa: F401,E402
+except ImportError:  # pragma: no cover - CI installs only the pure-python deps
+    pymupdf = None
 
 
 CAPTION_KEY = {"chart": "chart_caption", "image": "image_caption", "table": "table_caption"}
@@ -196,6 +203,49 @@ class RewriteMarkdownTests(unittest.TestCase):
             encoding="utf-8")
         rewrite_markdown(self.md, self.group, "figure-12.jpg", "../")
         self.assertIn("![](../images/figure-12.jpg)\n", self.md.read_text(encoding="utf-8"))
+
+
+@unittest.skipUnless(pymupdf is not None, "pymupdf/numpy not installed")
+class InkClampTests(unittest.TestCase):
+    """An edge sitting inside rendered ink must move inward, even with no text line."""
+
+    def _page(self):
+        doc = pymupdf.open()
+        return doc.new_page(width=200, height=200)
+
+    def test_top_edge_straddling_a_glyph_row_moves_below_it(self):
+        page = self._page()
+        page.draw_rect(pymupdf.Rect(20, 43, 180, 47), color=None, fill=(0, 0, 0))
+        union = (10.0, 50.0, 190.0, 150.0)
+        got = ink_clamp(pymupdf, page, (10.0, 45.0, 190.0, 155.0), union)
+        self.assertGreaterEqual(got[1], 46.5)
+        self.assertLessEqual(got[1], 50.0)
+
+    def test_clean_padding_band_keeps_the_box(self):
+        page = self._page()
+        union = (10.0, 50.0, 190.0, 150.0)
+        box = (10.0, 45.0, 190.0, 155.0)
+        self.assertEqual(ink_clamp(pymupdf, page, box, union), box)
+
+    def test_move_never_goes_inside_the_panel_union(self):
+        page = self._page()
+        page.draw_rect(pymupdf.Rect(20, 40, 180, 56), color=None, fill=(0, 0, 0))
+        union = (10.0, 50.0, 190.0, 150.0)
+        got = ink_clamp(pymupdf, page, (10.0, 45.0, 190.0, 155.0), union)
+        self.assertGreaterEqual(got[1], union[1])
+        self.assertLessEqual(got[1], union[1] + 1.0)
+
+    def test_ieee_abbreviation_fig_closes_the_run(self):
+        """IEEE papers print `Fig. 6.`; the full-word pattern missed every such figure."""
+        items = [
+            panel(8, 300, 400, "a.jpg"),
+            panel(8, 410, 500, "b.jpg", ["(e) annotation formats"]),
+            panel(8, 510, 620, "c.jpg",
+                  ["(e)", "Fig. 6. Dataset distributions over the listed 110 datasets."]),
+        ]
+        groups = find_groups(items)
+        self.assertEqual([g["figure"] for g in groups], [6])
+        self.assertEqual(len(groups[0]["panels"]), 3)
 
 
 class ClampEdgesTests(unittest.TestCase):
