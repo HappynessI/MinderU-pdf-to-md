@@ -467,7 +467,24 @@ def _translate_reference_heading(block: str, target_language: str) -> str:
     )
 
 
+def _has_natural_language(block: str) -> bool:
+    """False when a block holds no prose — only image references and markup.
+
+    A bare `![](images/x.jpg)` block used to stay in a translatable chunk, and the
+    model then dropped the image placeholder: a chunk that opens with one image
+    reference and a caption fails every structure retry and, once small enough that
+    it cannot be split further, kills the whole run. Emitting such blocks verbatim
+    between chunks removes the risk and changes nothing else.
+    """
+    remainder = MARKDOWN_IMAGE_RE.sub("", block)
+    remainder = HTML_IMAGE_RE.sub("", remainder)
+    remainder = re.sub(r"</?[A-Za-z][^>]*>", "", remainder)
+    remainder = re.sub(r"[!\[\]()\s*_`#>|~:\-–—.,;!?\"'’“”]+", "", remainder)
+    return bool(remainder.strip())
+
+
 def document_parts(
+
     markdown: str,
     *,
     target_language: str,
@@ -497,7 +514,12 @@ def document_parts(
 
         stripped = block.strip()
         is_frontmatter = index == 0 and stripped.startswith("---") and stripped.endswith("---")
-        translatable = bool(stripped) and reference_level is None and not is_frontmatter
+        translatable = (
+            bool(stripped)
+            and reference_level is None
+            and not is_frontmatter
+            and _has_natural_language(block)
+        )
         if not translatable:
             parts.append(DocumentPart(block, False))
             continue

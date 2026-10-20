@@ -584,6 +584,30 @@ Hello again.
         self.assertFalse(table_parts[0].translatable)
         self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
 
+    def test_image_only_block_is_not_sent_to_the_model(self):
+        source = "![](images/a.jpg)\n\nTable 3: Ablation study.\n\n"
+        parts = translator.document_parts(
+            source,
+            target_language="zh-CN",
+            translate_references=False,
+        )
+        self.assertEqual("".join(part.text for part in parts), source)
+        image_parts = [part for part in parts if "images/a.jpg" in part.text]
+        self.assertEqual(len(image_parts), 1)
+        self.assertFalse(image_parts[0].translatable)
+        self.assertTrue(
+            any("Ablation study" in part.text and part.translatable for part in parts)
+        )
+
+    def test_block_with_one_word_is_still_translatable(self):
+        source = "![](images/a.jpg) blurred scene\n\n"
+        parts = translator.document_parts(
+            source,
+            target_language="zh-CN",
+            translate_references=False,
+        )
+        self.assertTrue(all(part.translatable for part in parts))
+
     def test_chunk_boundary_whitespace_is_restored(self):
         source = "Paragraph.\n\n"
         self.assertEqual(
