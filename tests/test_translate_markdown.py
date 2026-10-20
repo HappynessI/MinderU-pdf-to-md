@@ -584,6 +584,17 @@ Hello again.
         self.assertFalse(table_parts[0].translatable)
         self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
 
+    def test_added_balanced_emphasis_is_accepted(self):
+        source = "WHAT HAPPENS The last query is a referring expression.\n"
+        translated = "**发生了什么** 最后一个查询是一个指称表达。\n"
+        translator.validate_final_document(source, translated)
+
+    def test_unbalanced_emphasis_is_rejected(self):
+        source = "WHAT HAPPENS The last query is a referring expression.\n"
+        translated = "**发生了什么 最后一个查询是一个指称表达。\n"
+        with self.assertRaises(translator.TranslationError):
+            translator.validate_final_document(source, translated)
+
     def test_code_only_block_is_not_sent_to_the_model(self):
         source = "```python\nimport numpy as np\n\nx = 1\n```\n\nProse paragraph.\n\n"
         parts = translator.document_parts(

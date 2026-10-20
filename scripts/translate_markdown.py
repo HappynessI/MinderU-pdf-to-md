@@ -719,11 +719,21 @@ def validate_final_document(
     often than the source did (the source may have said ``tokens``), and every
     term occurrence the source did carry is already enforced by the exact
     placeholder check in :func:`restore_markdown`.
+
+    Emphasis delimiters are left out too: ``**`` and ``__`` carry no content, and a
+    translation may emphasise a run-in label the source printed plain ("WHAT HAPPENS"
+    becoming "**发生了什么**"). With them in the multiset that stylistic choice failed
+    every structure retry of the chunk, and a chunk too small to split ended the run.
+    Every marker the source carried is still enforced by :func:`restore_markdown`, and
+    the pair balance below still catches broken markup.
     """
     validate_structure(source, translated)
     if "__MDT_" in translated:
         raise TranslationError("最终 Markdown 中残留了保护占位符")
-    excluded = set(terms)
+    if translated.count("**") % 2:
+        raise TranslationError("最终 Markdown 的强调标记未成对")
+    emphasis = {"**", "__"}
+    excluded = set(terms) | emphasis
     source_protected = [
         value
         for _placeholder, value in protect_markdown(source).replacements
