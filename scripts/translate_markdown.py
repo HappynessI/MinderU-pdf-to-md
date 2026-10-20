@@ -245,17 +245,38 @@ def load_do_not_translate(path: Optional[Path]) -> Tuple[str, Tuple[str, ...], s
 
 
 def _block_spans(markdown: str) -> Iterable[str]:
-    """Yield blocks while retaining their exact trailing blank-line separators."""
-    position = 0
-    pattern = re.compile(r".*?(?:\n[ \t]*\n+|\Z)", re.DOTALL)
-    for match in pattern.finditer(markdown):
-        block = match.group(0)
-        if not block:
-            continue
-        yield block
-        position = match.end()
-    if position < len(markdown):
-        yield markdown[position:]
+    """Yield blocks while retaining their exact trailing blank-line separators.
+
+    A blank line ends a block only outside a fenced code block. MinerU's listings and
+    logs carry blank lines inside ``` fences, and splitting there leaves unbalanced
+    fences: the fragment is no longer recognised as code, a chunk boundary can land in
+    the middle of it, and the model then rewrites code as prose.
+    """
+    lines = markdown.splitlines(keepends=True)
+    total = len(lines)
+    index = 0
+    while index < total:
+        buffer: List[str] = []
+        fence: Optional[str] = None
+        while index < total:
+            line = lines[index]
+            buffer.append(line)
+            stripped = line.strip()
+            index += 1
+            if fence is not None:
+                if re.fullmatch(r"(`{3,}|~{3,})", stripped):
+                    fence = None
+                continue
+            opener = re.match(r"(`{3,}|~{3,})", stripped)
+            if opener:
+                fence = opener.group(1)
+                continue
+            if stripped == "":
+                while index < total and lines[index].strip() == "":
+                    buffer.append(lines[index])
+                    index += 1
+                break
+        yield "".join(buffer)
 
 
 HTML_TABLE_PATTERN = re.compile(r"<table\b[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE)

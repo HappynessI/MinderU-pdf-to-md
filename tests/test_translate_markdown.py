@@ -584,6 +584,15 @@ Hello again.
         self.assertFalse(table_parts[0].translatable)
         self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
 
+    def test_blank_line_inside_fenced_code_does_not_split_the_block(self):
+        source = "Intro paragraph.\n\n```python\na = 1\n\nb = 2\n```\n\nAfter.\n\n"
+        blocks = list(translator._block_spans(source))
+        self.assertEqual("".join(blocks), source)
+        code_blocks = [block for block in blocks if "```python" in block]
+        self.assertEqual(len(code_blocks), 1)
+        self.assertIn("b = 2", code_blocks[0])
+        self.assertTrue(code_blocks[0].rstrip().endswith("```"))
+
     def test_image_only_block_is_not_sent_to_the_model(self):
         source = "![](images/a.jpg)\n\nTable 3: Ablation study.\n\n"
         parts = translator.document_parts(
