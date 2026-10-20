@@ -489,15 +489,18 @@ def _translate_reference_heading(block: str, target_language: str) -> str:
 
 
 def _has_natural_language(block: str) -> bool:
-    """False when a block holds no prose — only image references and markup.
+    """False when a block holds no prose to translate — only code, images, or markup.
 
-    A bare `![](images/x.jpg)` block used to stay in a translatable chunk, and the
-    model then dropped the image placeholder: a chunk that opens with one image
-    reference and a caption fails every structure retry and, once small enough that
-    it cannot be split further, kills the whole run. Emitting such blocks verbatim
-    between chunks removes the risk and changes nothing else.
+    Two failure modes come from sending such a block to the model. A bare
+    `![](images/x.jpg)` block makes it drop the image placeholder, and a chunk that
+    opens with a fenced code block makes it drop that block's placeholder: both fail
+    every structure retry, and once the piece is too small to split the whole run dies.
+    Fenced code is never translated anyway, so such blocks now stay verbatim between
+    chunks.
     """
-    remainder = MARKDOWN_IMAGE_RE.sub("", block)
+    remainder = re.sub(r"```.*?```", "", block, flags=re.DOTALL)
+    remainder = re.sub(r"~~~.*?~~~", "", remainder, flags=re.DOTALL)
+    remainder = MARKDOWN_IMAGE_RE.sub("", remainder)
     remainder = HTML_IMAGE_RE.sub("", remainder)
     remainder = re.sub(r"</?[A-Za-z][^>]*>", "", remainder)
     remainder = re.sub(r"[!\[\]()\s*_`#>|~:\-–—.,;!?\"'’“”]+", "", remainder)

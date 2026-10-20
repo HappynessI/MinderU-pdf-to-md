@@ -584,6 +584,21 @@ Hello again.
         self.assertFalse(table_parts[0].translatable)
         self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
 
+    def test_code_only_block_is_not_sent_to_the_model(self):
+        source = "```python\nimport numpy as np\n\nx = 1\n```\n\nProse paragraph.\n\n"
+        parts = translator.document_parts(
+            source,
+            target_language="zh-CN",
+            translate_references=False,
+        )
+        self.assertEqual("".join(part.text for part in parts), source)
+        code_parts = [part for part in parts if "import numpy" in part.text]
+        self.assertEqual(len(code_parts), 1)
+        self.assertFalse(code_parts[0].translatable)
+        self.assertTrue(
+            any("Prose paragraph" in part.text and part.translatable for part in parts)
+        )
+
     def test_blank_line_inside_fenced_code_does_not_split_the_block(self):
         source = "Intro paragraph.\n\n```python\na = 1\n\nb = 2\n```\n\nAfter.\n\n"
         blocks = list(translator._block_spans(source))
