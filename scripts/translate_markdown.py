@@ -502,7 +502,7 @@ def _has_natural_language(block: str) -> bool:
     remainder = re.sub(r"~~~.*?~~~", "", remainder, flags=re.DOTALL)
     remainder = MARKDOWN_IMAGE_RE.sub("", remainder)
     remainder = HTML_IMAGE_RE.sub("", remainder)
-    remainder = re.sub(r"</?[A-Za-z][^>]*>", "", remainder)
+    remainder = re.sub(r"</?\s*[A-Za-z][^>]*>", "", remainder)
     remainder = re.sub(r"[!\[\]()\s*_`#>|~:\-–—.,;!?\"'’“”]+", "", remainder)
     return bool(remainder.strip())
 
@@ -608,7 +608,7 @@ PROTECTED_PATTERN = re.compile(
     r"|(?:(?<!\\)\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$)"
     r"|(?:`+[^`\n]*`+)"
     r"|(?:(?<=\]\()[^)\n]+(?=\)))"
-    r"|(?:</?[A-Za-z][^>]*>)"
+    r"|(?:</?\s*[A-Za-z][^>]*>)"
     r"|(?:&(?:[A-Za-z][A-Za-z0-9]+|#[0-9]+|#x[0-9A-Fa-f]+);)"
     r"|(?:"
     + URL_TOKEN_PATTERN.pattern

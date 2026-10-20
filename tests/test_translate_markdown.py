@@ -584,6 +584,13 @@ Hello again.
         self.assertFalse(table_parts[0].translatable)
         self.assertTrue(any("Table caption" in part.text and part.translatable for part in parts))
 
+    def test_html_tag_with_a_space_is_protected(self):
+        protected = translator.protect_markdown("<thinking>x</ thinking>")
+        self.assertEqual(
+            [value for _placeholder, value in protected.replacements],
+            ["<thinking>", "</ thinking>"],
+        )
+
     def test_added_balanced_emphasis_is_accepted(self):
         source = "WHAT HAPPENS The last query is a referring expression.\n"
         translated = "**发生了什么** 最后一个查询是一个指称表达。\n"
